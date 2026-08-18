@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CRUCIBLE</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; }
+      body { background: #05070a; color: #d7dbe0; font-family: system-ui, sans-serif; font-size: 14px; }
+      #view { display: block; position: absolute; inset: 0; cursor: crosshair; }
+      .hud { position: absolute; background: rgba(10, 14, 18, 0.85); border: 1px solid #232b34; border-radius: 6px; padding: 8px 10px; }
+      #topbar { top: 8px; left: 8px; right: 8px; display: flex; gap: 16px; align-items: center; }
+      #topbar .title { font-weight: 700; letter-spacing: 0.12em; }
+      #ore { color: #c8920e; }
+      #build-panel { bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
+      .btn { background: #1b222b; border: 1px solid #333d49; color: #d7dbe0; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+      .btn:hover { background: #26303a; }
+      .btn:disabled { opacity: 0.4; cursor: default; }
+      .btn.armed { background: #3a3c1b; border-color: #c8920e; }
+      #selection { top: 60px; left: 8px; min-width: 180px; }
+      #log { bottom: 60px; left: 8px; max-width: 340px; font-size: 12px; }
+      #log div { color: #8f99a3; }
+      #overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); }
+      .panel { background: #0c1116; border: 1px solid #2b3540; border-radius: 8px; padding: 24px; max-width: 480px; text-align: center; }
+      .panel h1 { font-size: 1.3rem; letter-spacing: 0.15em; margin: 0 0 16px; }
+      .panel .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+      .hidden { display: none !important; }
+      .win { color: #4ade80; } .lose { color: #f87171; }
+      .panel.wide { max-width: 760px; text-align: left; overflow-y: auto; max-height: 86vh; }
+      .panel.wide h2 { font-size: 1rem; margin: 16px 0 6px; color: #c8920e; }
+      .muted { color: #8f99a3; font-size: 12px; }
+      #dash-champion .champ { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+      .spark { background: #0a0e13; border: 1px solid #232b34; border-radius: 4px; margin-top: 4px; }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid #1b232c; }
+      #dash-status { color: #f87171; min-height: 1.2em; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="topbar" class="hud">
+      <span class="title">CRUCIBLE</span>
+      <span id="opponent"></span>
+      <span>ore <span id="ore">0</span></span>
+      <span id="clock">0:00</span>
+    </div>
+
+    <div id="selection" class="hud hidden"></div>
+    <div id="build-panel" class="hud hidden"></div>
+    <div id="log" class="hud hidden"></div>
+
+    <div id="overlay">
+      <div class="panel" id="lobby">
+        <h1>CRUCIBLE</h1>
+        <p>Play the AI commander. Choose your opponent:</p>
+        <div class="row">
+          <button class="btn" data-opp="easy">Easy (turtle)</button>
+          <button class="btn" data-opp="medium">Medium (waves)</button>
+          <button class="btn" data-opp="hard">Hard (expand)</button>
+        </div>
+        <div class="row">
+          <button class="btn" id="open-dashboard">Dashboard &amp; Museum</button>
+        </div>
+      </div>
+      <div class="panel hidden" id="result">
+        <h1 id="result-title"></h1>
+        <p id="result-detail"></p>
+        <div class="row"><button class="btn" id="again">Play again</button></div>
+      </div>
+      <div class="panel wide hidden" id="dashboard">
+        <h1>DASHBOARD</h1>
+        <div id="dash-status"></div>
+        <div id="dash-champion"></div>
+        <div id="dash-elo"></div>
+        <div id="dash-stats"></div>
+        <div id="dash-museum"></div>
+        <div id="dash-events"></div>
+        <div class="row"><button class="btn" id="dash-back">Back to lobby</button></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
