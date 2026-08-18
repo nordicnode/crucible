@@ -40,6 +40,10 @@ pub struct TrainerConfig {
     pub bootstrap: bool,
     pub bootstrap_gens_per_stage: usize,
     pub bootstrap_seeds: usize,
+    /// Match cap used *only* during the bootstrap curriculum. The curriculum
+    /// converges (beats hard ≥ 90%) at short caps; the full-length self-play
+    /// cap is for the league, not the bootstrap floor.
+    pub bootstrap_match_timeout_ticks: i32,
     pub master_seed: u64,
 }
 
@@ -61,6 +65,7 @@ impl Default for TrainerConfig {
             bootstrap: false,
             bootstrap_gens_per_stage: 2,
             bootstrap_seeds: 2,
+            bootstrap_match_timeout_ticks: 2 * 60 * 10, // 2 minutes
             master_seed: 0xC0FFEE,
         }
     }
@@ -70,8 +75,11 @@ impl TrainerConfig {
     /// A small, fast configuration for demos and manual fast-forwards.
     pub fn small() -> Self {
         TrainerConfig {
-            population_size: 8,
-            mu: 2,
+            // Population/mu must be large enough for the bootstrap curriculum
+            // to converge (it runs the same schedule as the CI test); the
+            // self-play cost is kept low via opponents/seeds/match cap below.
+            population_size: 16,
+            mu: 4,
             self_play_opponents: 1,
             seeds_per_generation: 1,
             match_timeout_ticks: 3 * 60 * 10, // 3 minutes
@@ -84,8 +92,8 @@ impl TrainerConfig {
             report_seeds: 0,
             ghosts_per_generation: 1,
             bootstrap: true,
-            bootstrap_gens_per_stage: 1,
-            bootstrap_seeds: 1,
+            bootstrap_gens_per_stage: 2,
+            bootstrap_seeds: 2,
             ..TrainerConfig::default()
         }
     }
@@ -508,7 +516,7 @@ fn bootstrap_cold(
         es: EsParams { sigma: 0.05, ..es },
         gens_per_stage: cfg.bootstrap_gens_per_stage,
         seeds_per_generation: cfg.bootstrap_seeds,
-        match_timeout_ticks: cfg.match_timeout_ticks,
+        match_timeout_ticks: cfg.bootstrap_match_timeout_ticks,
         shaping_ticks: 600,
         master_seed,
     };
@@ -516,6 +524,21 @@ fn bootstrap_cold(
     while cur.stage != Stage::Done {
         cur.run_generation();
     }
+
+    // Enforce the bootstrap floor at crowning time (plan §5.7 / M4): the first
+    // champion must beat the hard scripted bot ≥ 90% on held-out maps before it
+    // is crowned. (The stronger "all three scripted bots ≥ 90%" regression bar
+    // is not yet robustly reachable — see CONTRACT.md — so hard remains the
+    // enforceable floor; easy/medium are recorded for the regression run.)
+    let held_out: Vec<u64> = (10_000..10_032).collect();
+    let rates = cur.scripted_win_rates(&held_out);
+    assert!(
+        rates[2] >= 0.90,
+        "bootstrap champion must beat hard >= 90% (got {:.1}%; easy {:.1}%, medium {:.1}%)",
+        rates[2] * 100.0,
+        rates[0] * 100.0,
+        rates[1] * 100.0
+    );
 
     // The bootstrap population becomes generation 0 of the trainer's lineage;
     // steady-state self-play resumes with the trainer's own ES parameters.
@@ -700,9 +723,11 @@ mod tests {
     fn trainer_bootstraps_cold_start() {
         let store = Arc::new(Store::in_memory().unwrap());
         let shared = Arc::new(TrainerShared::default());
+        // A converging bootstrap schedule (matches the CI curriculum test): the
+        // cold-start champion must clear the hard-bot floor before crowning.
         let cfg = TrainerConfig {
-            population_size: 6,
-            mu: 2,
+            population_size: 16,
+            mu: 4,
             self_play_opponents: 1,
             seeds_per_generation: 1,
             match_timeout_ticks: 300,
@@ -714,8 +739,9 @@ mod tests {
             },
             report_seeds: 0,
             bootstrap: true,
-            bootstrap_gens_per_stage: 1,
-            bootstrap_seeds: 1,
+            bootstrap_gens_per_stage: 2,
+            bootstrap_seeds: 2,
+            bootstrap_match_timeout_ticks: 2 * 60 * 10,
             ..TrainerConfig::default()
         };
 
@@ -725,8 +751,8 @@ mod tests {
         assert!(t.champion.is_some(), "bootstrap must crown a champion");
         assert_eq!(t.champion.as_ref().unwrap().generation, 0);
         assert_eq!(t.pop.generation, 0);
-        assert_eq!(t.ids.len(), 6);
-        assert_eq!(store.genomes_of_generation(0).unwrap().len(), 6);
+        assert_eq!(t.ids.len(), 16);
+        assert_eq!(store.genomes_of_generation(0).unwrap().len(), 16);
         assert!(store.get_reigning_champion().unwrap().is_some());
 
         // And the trainer keeps running self-play generations afterward.

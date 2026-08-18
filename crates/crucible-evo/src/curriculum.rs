@@ -3,13 +3,14 @@
 //! supplies seeds/config and drives generations; no IO or scheduling.
 //!
 //! Stages, in order: economy (ore mined) → production (army value) → combat
-//! (vs idle) → scripted easy → medium → hard. Each stage runs a *bounded*
-//! number of ES generations and then advances, so the whole schedule is a
-//! fixed, reproducible budget. The final measurement is the best genome's win
-//! rate against `hard` on held-out seeds.
+//! (vs idle) → scripted easy → medium → hard → a final combined
+//! easy+medium+hard gauntlet stage. Each stage runs a *bounded* number of ES
+//! generations and then advances, so the whole schedule is a fixed,
+//! reproducible budget. The final measurement is the best genome's win rate
+//! against the scripted bots on held-out seeds.
 
-use crucible_ai::{easy, hard, medium, series, Bot, GenomeBot};
-use crucible_sim::{GameConfig, Rng};
+use crucible_ai::{easy, hard, medium, run_match, Bot, GenomeBot};
+use crucible_sim::{GameConfig, Player, Rng};
 
 use crate::fitness::{evaluate_economy, evaluate_production, evaluate_vs, Noop};
 use crate::population::{EsParams, Population};
@@ -24,6 +25,10 @@ pub enum Stage {
     ScriptedEasy,
     ScriptedMedium,
     ScriptedHard,
+    /// Final combined stage: optimize against easy+medium+hard at once so the
+    /// champion clears the §5.7 regression bar (≥ 90% vs every scripted bot)
+    /// instead of overfitting the last bot it trained on.
+    ScriptedGauntlet,
     Done,
 }
 
@@ -35,7 +40,8 @@ impl Stage {
             Stage::Combat => Stage::ScriptedEasy,
             Stage::ScriptedEasy => Stage::ScriptedMedium,
             Stage::ScriptedMedium => Stage::ScriptedHard,
-            Stage::ScriptedHard => Stage::Done,
+            Stage::ScriptedHard => Stage::ScriptedGauntlet,
+            Stage::ScriptedGauntlet => Stage::Done,
             Stage::Done => Stage::Done,
         }
     }
@@ -48,6 +54,7 @@ impl Stage {
             Stage::ScriptedEasy => "scripted-easy",
             Stage::ScriptedMedium => "scripted-medium",
             Stage::ScriptedHard => "scripted-hard",
+            Stage::ScriptedGauntlet => "scripted-gauntlet",
             Stage::Done => "done",
         }
     }
@@ -60,7 +67,8 @@ impl Stage {
             Stage::ScriptedEasy => 3,
             Stage::ScriptedMedium => 4,
             Stage::ScriptedHard => 5,
-            Stage::Done => 6,
+            Stage::ScriptedGauntlet => 6,
+            Stage::Done => 7,
         }
     }
 }
@@ -93,6 +101,40 @@ impl Default for CurriculumConfig {
 
 fn mix(master_seed: u64, stage: Stage, generation: u32) -> u64 {
     master_seed ^ (stage.id().wrapping_mul(MIX)) ^ (generation as u64).wrapping_mul(MIX >> 1)
+}
+
+/// Play `genome` against `make_opponent` on every seed, both spawn sides
+/// (mirror fairness), and return the genome's win fraction.
+fn mirror_win_rate(
+    genome: &[f32],
+    seeds: &[u64],
+    config: &GameConfig,
+    make_opponent: impl Fn() -> Box<dyn Bot>,
+) -> f32 {
+    let mut wins = 0u32;
+    let mut total = 0u32;
+    for &seed in seeds {
+        // genome = P0
+        let mut g = GenomeBot::new(genome.to_vec());
+        let mut o = make_opponent();
+        if run_match(seed, config, &mut g, o.as_mut()).winner == Some(Player::P0) {
+            wins += 1;
+        }
+        total += 1;
+
+        // genome = P1
+        let mut g = GenomeBot::new(genome.to_vec());
+        let mut o = make_opponent();
+        if run_match(seed, config, o.as_mut(), &mut g).winner == Some(Player::P1) {
+            wins += 1;
+        }
+        total += 1;
+    }
+    if total == 0 {
+        0.0
+    } else {
+        wins as f32 / total as f32
+    }
 }
 
 pub struct Curriculum {
@@ -159,6 +201,21 @@ impl Curriculum {
                     Box::new(hard())
                 })
             }
+            Stage::ScriptedGauntlet => {
+                // Mean shaped fitness vs all three scripted bots. Optimizing
+                // the combined signal keeps the champion strong everywhere
+                // (the §5.7 regression bar) rather than against one opponent.
+                let e = evaluate_vs(genome, &seeds, &self.match_config, || -> Box<dyn Bot> {
+                    Box::new(easy())
+                });
+                let m = evaluate_vs(genome, &seeds, &self.match_config, || -> Box<dyn Bot> {
+                    Box::new(medium())
+                });
+                let h = evaluate_vs(genome, &seeds, &self.match_config, || -> Box<dyn Bot> {
+                    Box::new(hard())
+                });
+                (e + m + h) / 3.0
+            }
             Stage::Done => 0.0,
         }
     }
@@ -190,20 +247,40 @@ impl Curriculum {
         self.pop.genomes[0].clone()
     }
 
-    /// The best genome's win rate against the hard bot over held-out seeds.
+    /// The best genome's win rate against the hard bot over held-out seeds,
+    /// played both spawn sides (mirror fairness, plan §5.7).
     pub fn hard_win_rate(&self, seeds: &[u64]) -> f32 {
-        let genome = self.best_genome();
-        let report = series(
-            seeds.iter().copied(),
-            &self.match_config,
-            || -> Box<dyn Bot> { Box::new(GenomeBot::new(genome.clone())) },
-            || -> Box<dyn Bot> { Box::new(hard()) },
-        );
-        report.a_win_rate() as f32
+        self.scripted_win_rates(seeds)[2]
     }
 
-    /// Run the whole schedule to completion (through `ScriptedHard`). Returns
-    /// the best genome's win rate vs hard over `held_out`.
+    /// The best genome's win rate against each scripted bot — easy, medium,
+    /// hard — over `seeds`, played both spawn sides (mirror fairness). This is
+    /// the permanent regression bar from plan §5.7: a crowned champion must
+    /// beat all three ≥ 90%.
+    pub fn scripted_win_rates(&self, seeds: &[u64]) -> [f32; 3] {
+        let genome = self.best_genome();
+        [
+            mirror_win_rate(&genome, seeds, &self.match_config, || -> Box<dyn Bot> {
+                Box::new(easy())
+            }),
+            mirror_win_rate(&genome, seeds, &self.match_config, || -> Box<dyn Bot> {
+                Box::new(medium())
+            }),
+            mirror_win_rate(&genome, seeds, &self.match_config, || -> Box<dyn Bot> {
+                Box::new(hard())
+            }),
+        ]
+    }
+
+    /// True if the best genome beats every scripted bot at ≥ `threshold`.
+    pub fn beats_all_scripted(&self, seeds: &[u64], threshold: f32) -> bool {
+        self.scripted_win_rates(seeds)
+            .iter()
+            .all(|&r| r >= threshold)
+    }
+
+    /// Run the whole schedule to completion (through `ScriptedGauntlet`).
+    /// Returns the best genome's win rate vs hard over `held_out`.
     pub fn run_to_completion(&mut self, held_out: &[u64]) -> f32 {
         while self.stage != Stage::Done {
             self.run_generation();

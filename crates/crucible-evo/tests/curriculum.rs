@@ -34,17 +34,22 @@ fn curriculum_converges_to_beating_hard() {
     }
 
     let held_out: Vec<u64> = (1000..1032).collect(); // 32 unseen maps
-    let win_rate = c.hard_win_rate(&held_out);
+    let rates = c.scripted_win_rates(&held_out);
     println!(
-        "curriculum converged in {generations} generations; best genome beats hard {:.1}% over {} held-out seeds",
-        win_rate * 100.0,
-        held_out.len()
+        "curriculum converged in {generations} generations; best genome vs scripted bots over {} held-out seeds: easy {:.1}% / medium {:.1}% / hard {:.1}%",
+        held_out.len(),
+        rates[0] * 100.0,
+        rates[1] * 100.0,
+        rates[2] * 100.0
     );
 
+    // The enforceable bootstrap floor (plan §5.7 / M4) is hard ≥ 90%. The
+    // stronger "all three scripted bots ≥ 90%" bar is not yet robustly
+    // reachable — easy/medium are printed above and tracked in CONTRACT.md.
     assert!(
-        win_rate >= 0.90,
+        rates[2] >= 0.90,
         "curriculum must beat hard >= 90% (got {:.1}%)",
-        win_rate * 100.0
+        rates[2] * 100.0
     );
 }
 

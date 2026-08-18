@@ -20,7 +20,7 @@ design. This README tracks what is actually implemented.
 - ✅ **M8 — Balance harness + tuning** (counter matrix committed as a 32-seed CI baseline; all three counters in the 35–65% band)
 - ✅ **Champion & museum playable** — the live lobby now offers the reigning champion and any museum champion as opponents, not just scripted bots
 - ✅ **Replay spectate** — any stored match can be watched step-by-step in the browser: the wasm shim re-runs the exact server sim from the input log (full state, no fog), with play/pause/speed/scrub
-- ✅ **Bootstrap curriculum converges** — from random init, 12 generations reach a genome that beats the hard bot 100% over 32 held-out maps (CI-enforced in `crucible-evo/tests/curriculum.rs`)
+- ✅ **Bootstrap curriculum converges** — from random init, the staged curriculum (now ending in a combined easy+medium+hard gauntlet stage) reaches a genome that beats the hard bot 100% over 32 held-out maps; a cold-start **refuses to crown** unless that floor is met (CI-enforced in `crucible-evo/tests/curriculum.rs` + a structural gate in `bootstrap_cold`)
 
 > **M8 note:** the counter matrix is in-band and directionally correct
 > (tank > infantry 62%, artillery > tank 59%, infantry > artillery 56%).
@@ -80,12 +80,24 @@ wasm golden-parity test, and the client build + tests on every push and PR.
 - **Evolution strategy (μ+λ).** 64 genomes per generation; the top μ=16 are
   kept, λ=48 offspring are Gaussian-mutated (σ annealed 0.02→0.005, 10%
   macromutation). No crossover in v1, so lineage trees stay clean.
-- **Bootstrap curriculum.** A cold-start population is shaped through five
+- **Bootstrap curriculum.** A cold-start population is shaped through six
   stages — economy (ore mined) → production (army value) → combat (vs idle)
-  → scripted easy/medium/hard — before entering the self-play league. The
-  CI test proves it: **from random init, 12 generations reach a genome that
-  beats the hard bot 100% over 32 held-out maps** (schedule swept across four
-  master seeds; see `crucible-evo/tests/curriculum.rs`).
+  → scripted easy/medium/hard → a combined easy+medium+hard gauntlet stage —
+  before entering the self-play league. The CI test proves it: **from random
+  init, 14 generations reach a genome that beats the hard bot 100% over 32
+  held-out maps** (schedule swept across master seeds; see
+  `crucible-evo/tests/curriculum.rs`).
+
+  Two honest limits worth knowing:
+  - The bootstrap trains at a **2-minute match cap** (`bootstrap_match_timeout_ticks`),
+    separate from the league's cap. At the full 6-minute league cap the same
+    budget produces a rush specialist that *loses* to hard ~75% — so full-length
+    skill is the self-play/ghost league's job, not the bootstrap's.
+  - The plan's stronger bar (every champion beats **all three** scripted bots
+    ≥ 90%) is **not yet enforceable**: the bootstrap champion is rush-tuned and
+    its easy/medium rates are seed-dependent (easy 0–100%, medium 43–98% across
+    seeds). That needs a stronger curriculum, not just an assertion — see
+    `crates/crucible-evo/CONTRACT.md` §2.5.
 - **Champion gating.** The generation winner only becomes the live champion
   if it wins a reproducible gauntlet: ≥55% vs the incumbent and ≥50% vs
   sampled historical champions. Every promotion is logged with seeds.

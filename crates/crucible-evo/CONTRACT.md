@@ -31,19 +31,33 @@ parallelism (rayon), and match execution.
 
 ## 2.5 Bootstrap curriculum
 
-- `curriculum.rs` drives a cold-start population through five shaping stages
-  before the self-play league: economy (ore mined) → production (army value)
-  → combat (vs idle) → scripted easy/medium/hard. Each stage runs a bounded
+- `curriculum.rs` drives a cold-start population through staged shaping before
+  the self-play league: economy (ore mined) → production (army value) → combat
+  (vs idle) → scripted easy/medium/hard → **scripted gauntlet** (a final stage
+  whose fitness is the mean shaped score vs easy+medium+hard, so the champion
+  is not overfit to the last bot it trained on). Each stage runs a bounded
   number of generations and then advances; the whole schedule is a fixed,
   reproducible budget.
 - The CI test `curriculum_converges_to_beating_hard` pins the budget
   (pop 16, μ 4, σ 0.05, 2 gens/stage, 2 seeds/gen, 2-min match cap) and
-  asserts the final genome beats `hard` **≥ 90% over 32 held-out maps**.
-  Measured: **12 generations, 100% win rate**. The schedule was swept across
-  master seeds 1, 7, 42, and 20240818 and converged for all four.
+  asserts the final genome beats `hard` **≥ 90% over 32 held-out maps**
+  (both spawn sides). Measured: 14 generations → easy 100% / medium 98.4% /
+  hard 100% at the pinned master seed 20240818.
+- **The bootstrap match cap is 2 minutes** (`bootstrap_match_timeout_ticks`),
+  separate from the self-play/league cap. The curriculum only converges to
+  beat `hard` at short caps; at the full 6-min league cap the same budget
+  produces a rush specialist that loses to `hard` ~75% of the time. The
+  full-length meta is the self-play/ghost league's job, not the bootstrap's.
 - `crucible-server` runs this curriculum on a cold start when
-  `CRUCIBLE_TRAINER_BOOTSTRAP=1`, checkpointing the bootstrapped population +
-  first champion before the 24/7 self-play loop begins.
+  `CRUCIBLE_TRAINER_BOOTSTRAP=1`, and **refuses to crown** unless the
+  bootstrapped champion beats `hard` ≥ 90% on 32 held-out maps (a structural
+  gate in `bootstrap_cold`, not just a test).
+- **Known gap:** the plan's stronger regression bar — *every* champion beats
+  all three scripted bots ≥ 90% — is **not yet enforceable**. The bootstrap
+  champion is a rush specialist and its easy/medium rates are seed-dependent
+  (across 5 master seeds: easy 0–100%, medium 43–98% at the CI budget).
+  Enforcing that bar needs a stronger curriculum (larger population / more
+  medium-specific budget / a non-rush champion), not a one-line assertion.
 
 ## 3. Champion gating (the gauntlet)
 
