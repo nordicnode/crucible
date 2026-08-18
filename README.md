@@ -18,6 +18,7 @@ design. This README tracks what is actually implemented.
 - ✅ **M6 — Trainer + dashboard/museum UI + auto-battle**
 - ✅ **M7 — Ghost league**
 - ✅ **M8 — Balance harness + tuning** (counter matrix committed as a CI baseline; v1 tune lands all three counters in the 35–65% band)
+- ✅ **Champion & museum playable** — the live lobby now offers the reigning champion and any museum champion as opponents, not just scripted bots
 
 > **M8 note:** the counter matrix is now in-band and directionally correct
 > (tank > infantry, artillery > tank, infantry > artillery, each 50–62%).

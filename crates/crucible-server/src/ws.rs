@@ -2,7 +2,6 @@
 //! the fixed timestep, human commands are validated identically to the bot's,
 //! and the client only receives the human player's fogged view.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -16,7 +15,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crucible_ai::{easy, hard, medium, Bot};
+use crucible_ai::{easy, hard, medium, Bot, GenomeBot};
 use crucible_sim::{
     entity::BuildingType, fixed::FIX_SCALE, Command, Game, GameConfig, Map, Player, Replay,
     ReplayResult, UnitType,
@@ -124,11 +123,7 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
         }
     };
 
-    let mut bot: Box<dyn Bot> = match opponent.as_str() {
-        "easy" => Box::new(easy()),
-        "medium" => Box::new(medium()),
-        _ => Box::new(hard()),
-    };
+    let mut bot: Box<dyn Bot> = resolve_opponent(state.store.as_ref(), &opponent);
 
     // Seed from the wall clock (server is the one place this is allowed); the
     // seed is recorded in the replay so the match stays reproducible.
@@ -367,6 +362,41 @@ fn seed_now() -> u64 {
         .wrapping_mul(0x9E37_79B9)
 }
 
+/// Resolve a lobby opponent string to a concrete bot. Scripted bots (`easy`,
+/// `medium`, `hard`) are always available; `champion` plays the reigning
+/// champion and `museum:{genome_id}` plays any stored genome. Falls back to the
+/// hard bot when the requested genome is missing (e.g. a fresh DB with no
+/// crowned champion yet).
+fn resolve_opponent(store: &Store, opponent: &str) -> Box<dyn Bot> {
+    match opponent {
+        "easy" => return Box::new(easy()),
+        "medium" => return Box::new(medium()),
+        "hard" => return Box::new(hard()),
+        _ => {}
+    }
+
+    let genome_id = if opponent == "champion" {
+        store
+            .get_reigning_champion()
+            .ok()
+            .flatten()
+            .map(|c| c.genome_id)
+    } else if let Some(id) = opponent.strip_prefix("museum:") {
+        id.parse::<i64>().ok()
+    } else {
+        None
+    };
+
+    if let Some(id) = genome_id {
+        if let Ok(Some(weights)) = store.get_genome_weights(id) {
+            return Box::new(GenomeBot::new(weights));
+        }
+    }
+
+    tracing::warn!("no genome for opponent {opponent:?}; falling back to hard bot");
+    Box::new(hard())
+}
+
 /// Optional timeout override for tests/smoke runs (`CRUCIBLE_TIMEOUT_TICKS`).
 fn timeout_override(mut config: GameConfig) -> GameConfig {
     if let Ok(v) = std::env::var("CRUCIBLE_TIMEOUT_TICKS") {
@@ -377,5 +407,54 @@ fn timeout_override(mut config: GameConfig) -> GameConfig {
     config
 }
 
-#[allow(dead_code)]
-fn _store_arc(_: Arc<Store>) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_opponent_scripted_and_fallback() {
+        let store = Store::in_memory().unwrap();
+        assert_eq!(resolve_opponent(&store, "easy").name(), "easy");
+        assert_eq!(resolve_opponent(&store, "medium").name(), "medium");
+        assert_eq!(resolve_opponent(&store, "hard").name(), "hard");
+        // Unknown strings and a missing champion both fall back to hard.
+        assert_eq!(resolve_opponent(&store, "champion").name(), "hard");
+        assert_eq!(resolve_opponent(&store, "bogus").name(), "hard");
+    }
+
+    #[test]
+    fn resolve_opponent_champion_and_museum() {
+        let store = Store::in_memory().unwrap();
+        let weights = vec![0.1_f32, -0.2, 0.3];
+        let id = store.save_genome(3, None, "init", &weights).unwrap();
+        store.crown_champion(id, 3, None).unwrap();
+
+        assert_eq!(resolve_opponent(&store, "champion").name(), "genome");
+        assert_eq!(
+            resolve_opponent(&store, &format!("museum:{id}")).name(),
+            "genome"
+        );
+        // A museum id with no stored genome falls back to hard.
+        assert_eq!(resolve_opponent(&store, "museum:9999").name(), "hard");
+    }
+
+    #[test]
+    fn champion_opponent_plays_a_match() {
+        let store = Store::in_memory().unwrap();
+        let genome = crucible_ai::init(&mut crucible_sim::Rng::from_seed(7));
+        let id = store.save_genome(0, None, "init", &genome).unwrap();
+        store.crown_champion(id, 0, None).unwrap();
+
+        let mut champ = resolve_opponent(&store, "champion");
+        assert_eq!(champ.name(), "genome");
+
+        // The learned commander must drive a full match through the same
+        // decision layer the live WS loop uses, without panicking.
+        let cfg = crucible_sim::GameConfig {
+            timeout_ticks: 300,
+            ..crucible_sim::GameConfig::default()
+        };
+        let outcome = crucible_ai::run_match(11, &cfg, &mut *champ, &mut hard());
+        assert!(outcome.duration_ticks > 0, "champion match failed to run");
+    }
+}

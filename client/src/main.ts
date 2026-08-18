@@ -31,7 +31,7 @@ const renderer = new Renderer();
 
 let selection = new Set<number>();
 let placementMode: BuildingType | null = null;
-let opponent = "hard";
+let opponentLabel = "hard";
 
 // Input drag state.
 let dragStart: [number, number] | null = null;
@@ -59,7 +59,7 @@ function onServerMsg(msg: ServerMsg): void {
       el("build-panel").classList.remove("hidden");
       el("selection").classList.remove("hidden");
       el("log").classList.remove("hidden");
-      el("opponent").textContent = `vs ${opponent}`;
+      el("opponent").textContent = `vs ${opponentLabel}`;
       break;
     }
     case "stateDiff": {
@@ -81,8 +81,8 @@ function onServerMsg(msg: ServerMsg): void {
   }
 }
 
-function startMatch(which: string): void {
-  opponent = which;
+function startMatch(which: string, label?: string): void {
+  opponentLabel = label ?? which;
   selection = new Set();
   placementMode = null;
   net.close();
@@ -356,13 +356,71 @@ function frame(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Opponent picker
+// ---------------------------------------------------------------------------
+
+interface ChampionInfo {
+  genome_id: number;
+  generation: number;
+  reigning: boolean;
+  elo: number | null;
+}
+
+async function initOpponentPicker(): Promise<void> {
+  const championBtn = document.getElementById("champion-btn") as HTMLButtonElement | null;
+  const museumRow = el("museum-opps");
+  try {
+    const [champRes, museumRes] = await Promise.all([
+      fetch("/api/champion"),
+      fetch("/api/museum"),
+    ]);
+    const champ = (await champRes.json()) as { champion: ChampionInfo | null };
+    const museum = (await museumRes.json()) as { champions: ChampionInfo[] };
+
+    if (championBtn) {
+      if (champ.champion) {
+        const c = champ.champion;
+        const elo = c.elo == null ? "" : ` · Elo ${Math.round(c.elo)}`;
+        championBtn.textContent = `Champion (gen ${c.generation}${elo})`;
+        championBtn.disabled = false;
+      } else {
+        championBtn.textContent = "Champion (none crowned yet)";
+        championBtn.disabled = true;
+      }
+    }
+
+    museumRow.innerHTML = "";
+    const bosses = museum.champions.filter((c) => !c.reigning).reverse().slice(0, 6);
+    if (bosses.length > 0) {
+      const label = document.createElement("span");
+      label.className = "muted";
+      label.textContent = "Museum bosses:";
+      museumRow.appendChild(label);
+      for (const c of bosses) {
+        const b = document.createElement("button");
+        b.className = "btn";
+        b.textContent = `#${c.genome_id} (gen ${c.generation})`;
+        b.addEventListener("click", () => startMatch(`museum:${c.genome_id}`, `champion #${c.genome_id}`));
+        museumRow.appendChild(b);
+      }
+    }
+  } catch {
+    if (championBtn) {
+      championBtn.textContent = "Champion (unavailable)";
+      championBtn.disabled = true;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 document.querySelectorAll<HTMLButtonElement>("[data-opp]").forEach((btn) => {
-  btn.addEventListener("click", () => startMatch(btn.dataset.opp!));
+  btn.addEventListener("click", () => startMatch(btn.dataset.opp!, btn.dataset.label));
 });
 initDashboard();
+void initOpponentPicker();
 el("again").addEventListener("click", () => {
   el("result").classList.add("hidden");
   el("lobby").classList.remove("hidden");

@@ -3,8 +3,8 @@
 The orchestrator binary and **the only impure crate**. It owns the network,
 filesystem, SQLite, wall clock, and threads, and injects them into the pure
 crates. **Status: M3 (WS match + SQLite) + M5 (museum/Elo API) + M6 (self-play
-trainer, dashboard API, auto-battle) + M7 (ghost pool + focused cycles)
-implemented.**
+trainer, dashboard API, auto-battle) + M7 (ghost pool + focused cycles) +
+M9 (champion & museum playable in the live lobby) implemented.**
 
 ## 1. Purity split (must hold forever)
 
@@ -28,6 +28,10 @@ implemented.**
   `JoinMatch { opponent }` then `Commands { tick, cmds[] }`; server sends
   `MatchStart`, per-tick fogged `StateDiff`, and `MatchEnd { result, replay_id }`.
   Invalid commands are rejected with a reason.
+- `opponent` is `easy` | `medium` | `hard` (scripted baselines),
+  `champion` (the reigning champion genome), or `museum:{genome_id}` (any
+  stored genome). A missing genome (e.g. no champion crowned yet) falls back
+  to the hard bot rather than erroring.
 
 ## 3. Trainer contract
 
