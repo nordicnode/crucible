@@ -3,7 +3,7 @@
 A minimalist real-time strategy game with one twist: **the opponent is a neural
 network that learns while you play.**
 
-Every match you fight — win or lose — becomes training data. The AI plays
+Every match you fight, win or lose, becomes training data. The AI plays
 against itself around the clock, a champion only gets replaced when a
 challenger can prove it's better, and the strategy you used to win last night
 gets countered before you sit down again.
@@ -15,7 +15,7 @@ gets countered before you sit down again.
 - **Watch it improve.** The dashboard charts the champion's Elo over
   generations, its lineage, and every dethroned champion.
 - **Replay any match.** Every game is saved as a tiny input log; watch it back
-  step-by-step in the browser — unfogged, with play / pause / speed / scrub.
+  step-by-step in the browser, unfogged, with play / pause / speed / scrub.
 - **Feed it ghosts.** Your matches are replayed during training as frozen
   "ghost" opponents, so the strategy that beat you becomes tomorrow's training
   data.
@@ -60,7 +60,7 @@ remaining value wins.
 ## The game
 
 One resource (ore), six buildings (HQ, Refinery, Barracks, Factory, Tech Lab,
-Turret), four units (Harvester, Infantry, Tank, Artillery — artillery needs a
+Turret), four units (Harvester, Infantry, Tank, and Artillery, which needs a
 Tech Lab), on procedurally generated 64×64 maps. The simulation runs at a fixed
 10 ticks per second with a ~15-minute match cap and is fully deterministic and
 server-authoritative.
@@ -86,7 +86,7 @@ CRUCIBLE_TRAINER=1 CRUCIBLE_TRAINER_SMALL=1 CRUCIBLE_TRAINER_GENERATIONS=5 cargo
 | `CRUCIBLE_TRAINER_SMALL=1` | small, fast population for demos |
 | `CRUCIBLE_DB=path` | SQLite file (default `data/crucible.db`) |
 
-Progress — population, champion, Elo, replays — is checkpointed in SQLite and
+Progress (population, champion, Elo, replays) is checkpointed in SQLite and
 resumes across restarts. Delete `data/crucible.db` for a fresh cold start.
 
 Watch it learn at `http://127.0.0.1:8787/api/status` (generation, matches run)
@@ -95,11 +95,11 @@ and `http://127.0.0.1:8787/api/champion` (current champion + Elo).
 ## How the AI works
 
 - **The commander, not the soldier.** The evolvable brain is a small neural
-  network (~12k weights) that makes strategic decisions on a 2-second tick —
+  network (~12k weights) that makes strategic decisions on a 2-second tick:
   build, train, expand, attack. Individual units run scripted micro. It plays
   with the same fog of war and APM limit you do.
 - **Evolution strategy.** A population of genomes competes in headless
-  self-play; the strongest are kept and mutated. No backpropagation — selection
+  self-play; the strongest are kept and mutated. No backpropagation; selection
   pressure does the learning.
 - **The gauntlet.** A challenger only becomes champion by beating the incumbent
   (and sampled former champions) in a reproducible match series. Elo tracks the
@@ -108,7 +108,7 @@ and `http://127.0.0.1:8787/api/champion` (current champion + Elo).
   a strategy that beats the champion gets countered within a training cycle.
 - **Determinism.** One seeded PRNG, a fixed timestep, integer math, and
   input-log replays mean any match or promotion can be reproduced
-  byte-for-byte — natively and in the browser's wasm shim.
+  byte-for-byte, natively and in the browser's wasm shim.
 
 ## For developers
 
@@ -125,7 +125,7 @@ crates/
 client/                  TypeScript + Vite + Canvas 2D
 ```
 
-Only `crucible-server` touches the network, filesystem, clock, or threads — the
+Only `crucible-server` touches the network, filesystem, clock, or threads; the
 client never implements game rules.
 
 ```bash
