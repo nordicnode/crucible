@@ -413,7 +413,7 @@ Each milestone is independently testable and runnable. **Do not skip ahead — d
 
 - [ ] Human can play a full match in browser vs the live champion on localhost; server-authoritative, replays stored.
 - [ ] Trainer runs 24/7 within CPU budget; survives restarts with zero lost state.
-- [ ] Bootstrap curriculum converges from random init to beating the hard scripted bot ≥ 90%, reproducibly.
+- [x] Bootstrap curriculum converges from random init to beating the hard scripted bot ≥ 90%, reproducibly. (Measured: 12 generations → 100% over 32 held-out maps; CI-enforced in `crucible-evo/tests/curriculum.rs`.)
 - [ ] Champion promotions only via gauntlet; full lineage + Elo history queryable; museum playable.
 - [ ] Dashboard shows Elo-over-time, training stats, change reports, and an accurate "while you were away".
 - [ ] Ghost league demonstrably adapts: scripted-upset test (M7 acceptance) passes.

@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crucible_evo::{
-    ghost_fitness, run_gauntlet, self_play_fitness, EsParams, GauntletConfig, Ghost, GhostPool,
-    Population,
+    ghost_fitness, run_gauntlet, self_play_fitness, Curriculum, CurriculumConfig, EsParams,
+    GauntletConfig, Ghost, GhostPool, Population, Stage,
 };
 use crucible_sim::{GameConfig, Player, Replay, Rng};
 
@@ -35,6 +35,11 @@ pub struct TrainerConfig {
     pub ghosts_per_generation: usize,
     /// Weight of ghost fitness vs self-play fitness (0..1).
     pub ghost_weight: f32,
+    /// Run the staged bootstrap curriculum on a cold start (plan §5.7) before
+    /// the self-play loop. Produces a competent population + first champion.
+    pub bootstrap: bool,
+    pub bootstrap_gens_per_stage: usize,
+    pub bootstrap_seeds: usize,
     pub master_seed: u64,
 }
 
@@ -53,6 +58,9 @@ impl Default for TrainerConfig {
             report_seeds: 8,
             ghosts_per_generation: 1,
             ghost_weight: 0.3,
+            bootstrap: false,
+            bootstrap_gens_per_stage: 2,
+            bootstrap_seeds: 2,
             master_seed: 0xC0FFEE,
         }
     }
@@ -75,6 +83,9 @@ impl TrainerConfig {
             },
             report_seeds: 0,
             ghosts_per_generation: 1,
+            bootstrap: true,
+            bootstrap_gens_per_stage: 1,
+            bootstrap_seeds: 1,
             ..TrainerConfig::default()
         }
     }
@@ -207,6 +218,14 @@ impl Trainer {
         // Load the reigning champion and recent historical champions.
         let champion = load_champion(&store)?;
         let historical = load_historical(&store)?;
+
+        // Bootstrap a cold start through the staged curriculum (plan §5.7) so
+        // the self-play loop begins from a competent population + champion.
+        let (pop, ids, champion) = if cfg.bootstrap && champion.is_none() && ids.is_empty() {
+            bootstrap_cold(&store, &cfg, es, master_seed)?
+        } else {
+            (pop, ids, champion)
+        };
 
         // Rebuild the ghost pool from stored human matches.
         let ghost_pool = load_ghost_pool(&store, 200)?;
@@ -475,6 +494,56 @@ fn load_ghost_pool(store: &Store, max_size: usize) -> Result<GhostPool, rusqlite
     Ok(pool)
 }
 
+/// Run the staged bootstrap curriculum on a cold start and checkpoint the
+/// resulting population + first champion (plan §5.7).
+fn bootstrap_cold(
+    store: &Store,
+    cfg: &TrainerConfig,
+    es: EsParams,
+    master_seed: u64,
+) -> Result<(Population, Vec<i64>, Option<Champion>), rusqlite::Error> {
+    // Higher exploration than steady-state self-play: a random population needs
+    // bigger jumps to cross the "can build a base" fitness cliff.
+    let ccfg = CurriculumConfig {
+        es: EsParams { sigma: 0.05, ..es },
+        gens_per_stage: cfg.bootstrap_gens_per_stage,
+        seeds_per_generation: cfg.bootstrap_seeds,
+        match_timeout_ticks: cfg.match_timeout_ticks,
+        shaping_ticks: 600,
+        master_seed,
+    };
+    let mut cur = Curriculum::init(ccfg);
+    while cur.stage != Stage::Done {
+        cur.run_generation();
+    }
+
+    // The bootstrap population becomes generation 0 of the trainer's lineage;
+    // steady-state self-play resumes with the trainer's own ES parameters.
+    let mut pop = cur.pop;
+    pop.generation = 0;
+    pop.params = es;
+    pop.sigma = es.sigma;
+    let rows: Vec<(Option<i64>, &str, Vec<f32>)> = pop
+        .genomes
+        .iter()
+        .map(|g| (None, "bootstrap", g.clone()))
+        .collect();
+    let ids = store.save_generation(0, &rows)?;
+
+    // The elitist best of the curriculum becomes the first champion.
+    let champion_id = ids[0];
+    store.crown_champion(champion_id, 0, None)?;
+    store.record_elo(champion_id, 1500.0)?;
+    let champion = Some(Champion {
+        genome_id: champion_id,
+        weights: pop.genomes[0].clone(),
+        generation: 0,
+        elo: 1500.0,
+    });
+
+    Ok((pop, ids, champion))
+}
+
 fn load_champion(store: &Store) -> Result<Option<Champion>, rusqlite::Error> {
     let Some(c) = store.get_reigning_champion()? else {
         return Ok(None);
@@ -625,6 +694,44 @@ mod tests {
         let mut rng = Rng::from_seed(1);
         let sampled = t.sample_ghosts(&mut rng);
         assert_eq!(sampled.len(), 1);
+    }
+
+    #[test]
+    fn trainer_bootstraps_cold_start() {
+        let store = Arc::new(Store::in_memory().unwrap());
+        let shared = Arc::new(TrainerShared::default());
+        let cfg = TrainerConfig {
+            population_size: 6,
+            mu: 2,
+            self_play_opponents: 1,
+            seeds_per_generation: 1,
+            match_timeout_ticks: 300,
+            gauntlet: GauntletConfig {
+                champion_seeds: 1,
+                historical_seeds: 1,
+                historical_count: 2,
+                ..GauntletConfig::default()
+            },
+            report_seeds: 0,
+            bootstrap: true,
+            bootstrap_gens_per_stage: 1,
+            bootstrap_seeds: 1,
+            ..TrainerConfig::default()
+        };
+
+        // Cold start: the curriculum should crown a champion and checkpoint the
+        // bootstrapped population before any self-play generation runs.
+        let mut t = Trainer::start(store.clone(), shared.clone(), cfg).unwrap();
+        assert!(t.champion.is_some(), "bootstrap must crown a champion");
+        assert_eq!(t.champion.as_ref().unwrap().generation, 0);
+        assert_eq!(t.pop.generation, 0);
+        assert_eq!(t.ids.len(), 6);
+        assert_eq!(store.genomes_of_generation(0).unwrap().len(), 6);
+        assert!(store.get_reigning_champion().unwrap().is_some());
+
+        // And the trainer keeps running self-play generations afterward.
+        t.run_generation().unwrap();
+        assert!(t.pop.generation >= 1);
     }
 
     #[test]

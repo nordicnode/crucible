@@ -47,11 +47,20 @@ fn start_trainer(store: Arc<Store>, shared: Arc<TrainerShared>) {
     let small = std::env::var("CRUCIBLE_TRAINER_SMALL")
         .map(|v| v == "1")
         .unwrap_or(false);
-    let cfg = if small {
+    let mut cfg = if small {
         TrainerConfig::small()
     } else {
         TrainerConfig::default()
     };
+    // `CRUCIBLE_TRAINER_BOOTSTRAP=1` runs the staged curriculum (plan §5.7)
+    // on a cold start, so the self-play loop begins from a competent
+    // population and a champion that already beats the hard bot.
+    if std::env::var("CRUCIBLE_TRAINER_BOOTSTRAP")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        cfg.bootstrap = true;
+    }
 
     tokio::task::spawn_blocking(move || {
         shared

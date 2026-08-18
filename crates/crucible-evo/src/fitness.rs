@@ -98,6 +98,53 @@ pub fn evaluate_economy(genome: &[f32], seeds: &[u64], config: &GameConfig, tick
     total / seeds.len() as f32
 }
 
+/// Combat-military value a player has on the field (combat units + military
+/// buildings), used as the stage-2 production shaping signal. Harvesters,
+/// refineries, and the HQ are economy, not army.
+pub fn army_value(g: &Game, p: Player) -> i32 {
+    let mut v = 0;
+    for u in &g.units {
+        if u.owner == p && unit_stats(u.utype).damage > 0 {
+            v += unit_stats(u.utype).cost;
+        }
+    }
+    for b in &g.buildings {
+        if b.owner == p
+            && matches!(
+                b.btype,
+                BuildingType::Barracks
+                    | BuildingType::Factory
+                    | BuildingType::TechLab
+                    | BuildingType::Turret
+            )
+        {
+            v += building_stats(b.btype).cost;
+        }
+    }
+    v
+}
+
+/// Bootstrap stage 2 fitness: army value built by `genome` alone by `ticks`
+/// game ticks, averaged over seeds. Higher is better.
+pub fn evaluate_production(genome: &[f32], seeds: &[u64], config: &GameConfig, ticks: i32) -> f32 {
+    let mut total = 0.0f32;
+    for &seed in seeds {
+        let mut g = Game::new(Map::generate(seed), config.clone());
+        let mut bot = GenomeBot::new(genome.to_vec());
+        while g.tick < ticks && !g.is_over() {
+            if g.is_command_tick() {
+                let cmds = bot.decide(&g, Player::P0);
+                if !cmds.is_empty() {
+                    g.apply_commands(Player::P0, &cmds);
+                }
+            }
+            g.step();
+        }
+        total += army_value(&g, Player::P0) as f32;
+    }
+    total / seeds.len() as f32
+}
+
 /// Mean shaped fitness of `genome` against a set of sampled opponents (from
 /// the population) plus the reigning champion. Each opponent is played on
 /// every seed, both spawn sides. Used by the self-play trainer.

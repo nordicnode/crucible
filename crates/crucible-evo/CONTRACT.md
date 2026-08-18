@@ -1,10 +1,11 @@
 # CONTRACT — crucible-evo
 
-Pure training logic: the (μ+λ) evolution strategy, fitness, lineage, ghosts,
-the champion gauntlet, Elo, change reports, and the balance harness. Depends on
-`crucible-sim` and `crucible-ai` only. **Status: M4 (population + fitness) +
-M5 (gauntlet, lineage, league/Elo, change reports) + M7 (ghosts, ghost pool,
-ghost fitness) + M8 (balance harness + baseline) implemented.**
+Pure training logic: the (μ+λ) evolution strategy, fitness, the bootstrap
+curriculum, lineage, ghosts, the champion gauntlet, Elo, change reports, and
+the balance harness. Depends on `crucible-sim` and `crucible-ai` only.
+**Status: M4 (population + fitness + curriculum) + M5 (gauntlet, lineage,
+league/Elo, change reports) + M7 (ghosts, ghost pool, ghost fitness) + M8
+(balance harness + baseline) implemented.**
 
 ## 1. Purity boundary
 
@@ -27,6 +28,22 @@ parallelism (rayon), and match execution.
   population, 2 vs champion, 2 vs ghosts — with both spawn sides played.
 - Every match run is seeded and **reproducible**; seeds + genome ids are logged
   per match (see §5).
+
+## 2.5 Bootstrap curriculum
+
+- `curriculum.rs` drives a cold-start population through five shaping stages
+  before the self-play league: economy (ore mined) → production (army value)
+  → combat (vs idle) → scripted easy/medium/hard. Each stage runs a bounded
+  number of generations and then advances; the whole schedule is a fixed,
+  reproducible budget.
+- The CI test `curriculum_converges_to_beating_hard` pins the budget
+  (pop 16, μ 4, σ 0.05, 2 gens/stage, 2 seeds/gen, 2-min match cap) and
+  asserts the final genome beats `hard` **≥ 90% over 32 held-out maps**.
+  Measured: **12 generations, 100% win rate**. The schedule was swept across
+  master seeds 1, 7, 42, and 20240818 and converged for all four.
+- `crucible-server` runs this curriculum on a cold start when
+  `CRUCIBLE_TRAINER_BOOTSTRAP=1`, checkpointing the bootstrapped population +
+  first champion before the 24/7 self-play loop begins.
 
 ## 3. Champion gating (the gauntlet)
 

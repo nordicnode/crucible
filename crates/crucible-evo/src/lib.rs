@@ -8,6 +8,7 @@
 //! and behavioral change reports. Ghosts land in M7.
 
 pub mod balance;
+pub mod curriculum;
 pub mod fitness;
 pub mod gauntlet;
 pub mod ghost;
@@ -20,8 +21,10 @@ pub use balance::{
     balance_table, bot_tier, bot_tier_lengths, bot_tiers, composition_cost, counter_matrix, median,
     micro_matchup, micro_matchup_rate, Composition, WinRate,
 };
+pub use curriculum::{Curriculum, CurriculumConfig, Stage};
 pub use fitness::{
-    evaluate_economy, evaluate_vs, self_play_fitness, shaped_fitness, spent_value, Noop,
+    army_value, evaluate_economy, evaluate_production, evaluate_vs, self_play_fitness,
+    shaped_fitness, spent_value, Noop,
 };
 pub use gauntlet::{run_gauntlet, should_promote, GauntletConfig, GauntletResult};
 pub use ghost::{ghost_fitness, Ghost, GhostEntry, GhostPool};

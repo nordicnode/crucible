@@ -20,7 +20,8 @@ pub use commander::GenomeBot;
 pub use decision::decide;
 pub use features::{extract, FeatureInput, FEATURE_DIM};
 pub use headless::{
-    run_match, run_match_detailed, run_match_with_replay, DetailedOutcome, MatchOutcome,
+    run_match, run_match_detailed, run_match_with_replay, series, DetailedOutcome, MatchOutcome,
+    SeriesReport,
 };
 pub use network::{forward, init, mutate, GENOME_LEN, OUTPUT};
 pub use scripted::{easy, hard, medium};
