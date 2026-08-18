@@ -17,14 +17,16 @@ design. This README tracks what is actually implemented.
 - ✅ **M5 — Gauntlet, lineage, Elo, Museum API**
 - ✅ **M6 — Trainer + dashboard/museum UI + auto-battle**
 - ✅ **M7 — Ghost league**
-- ✅ **M8 — Balance harness + tuning** (counter matrix committed as a CI baseline; v1 tune lands all three counters in the 35–65% band)
+- ✅ **M8 — Balance harness + tuning** (counter matrix committed as a 32-seed CI baseline; all three counters in the 35–65% band)
 - ✅ **Champion & museum playable** — the live lobby now offers the reigning champion and any museum champion as opponents, not just scripted bots
 
-> **M8 note:** the counter matrix is now in-band and directionally correct
-> (tank > infantry, artillery > tank, infantry > artillery, each 50–62%).
-> Match-length p50 is measured and guarded but still sits outside the
-> 5–10 min target (rush-vs-turtle ~2.5 min, hard-vs-medium ~14 min) — the
-> next tuning pass.
+> **M8 note:** the counter matrix is in-band and directionally correct
+> (tank > infantry 62%, artillery > tank 59%, infantry > artillery 56%).
+> Bot pacing was retuned so match-length p50 sits in the 5–10 min target:
+> rush-vs-turtle ~5.8 min (no more 2.5-min rush blowouts) and
+> hard-vs-medium ~9.3 min (no more 14-min stalemates). The baseline is
+> pinned at 32 seeds, and the turtle's finite turrets are what stop it from
+> holding forever.
 
 ## Architecture
 

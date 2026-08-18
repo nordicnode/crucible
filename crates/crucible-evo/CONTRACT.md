@@ -64,14 +64,17 @@ parallelism (rayon), and match execution.
   (`counter_matrix`, `bot_tiers`, `balance_table`) plus match-length
   percentiles (`bot_tier_lengths`, `median`).
 - The committed baseline (`tests/fixtures/balance_baseline.json`) pins the
-  counter matrix and bot tiers over a fixed seed set; the CI test
-  `balance_table_matches_baseline` fails if any sim/unit change moves a rate.
+  counter matrix and bot tiers over a fixed **32-seed** set (3.125% rate
+  resolution); the CI test `balance_table_matches_baseline` fails if any
+  sim/unit change moves a rate.
 - Target band: no unit may win its counter matchup outside **35–65%** at equal
   cost, and each counter must still win a majority. The v1 tune satisfies this
-  for all three counters (tank>infantry, artillery>tank, infantry>artillery).
-- Match-length p50 targets 5–10 min. As shipped, rush-vs-turtle ends ~2.5 min
-  and hard-vs-medium stalemates ~14 min; `match_length_p50_resolves_before_timeout`
-  guards the weaker invariant (no all-draw) while the band remains a follow-up.
+  for all three counters (tank>infantry 62%, artillery>tank 59%,
+  infantry>artillery 56%).
+- Match-length p50 targets 5–10 min. `match_length_p50_within_band` asserts
+  both bot tiers land in the band (rush-vs-turtle ~5.8 min,
+  hard-vs-medium ~9.3 min); the turtle's finite, never-rebuilt turrets are
+  what let sustained waves break through instead of stalemating.
 
 ## 7. Guarantees to dependents
 

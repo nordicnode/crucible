@@ -151,6 +151,9 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             splash: tiles(1),
             build_time: TICKS_PER_SEC * 16,
         },
+        // Balance-tuned: `min_range`/`cooldown` are what keep artillery a soft
+        // counter to tanks (outranged) and soft-countered by infantry (inside
+        // min range). See `crucible-evo/tests/fixtures/balance_baseline.json`.
         Artillery => UnitStats {
             cost: 200,
             hp: 60,

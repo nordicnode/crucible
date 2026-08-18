@@ -6,7 +6,7 @@ use crucible_evo::{balance_table, bot_tier_lengths, median};
 use crucible_sim::{GameConfig, TICKS_PER_SEC};
 
 fn seeds() -> Vec<u64> {
-    (0..16).collect()
+    (0..32).collect()
 }
 
 fn config() -> GameConfig {
@@ -47,14 +47,11 @@ fn balance_table_matches_baseline() {
 }
 
 #[test]
-fn match_length_p50_resolves_before_timeout() {
-    // M8 target: match length p50 within 5–10 min (300–600s). As of the v1
-    // tune the two bot tiers sit outside that band — rush-vs-turtle ends in
-    // ~2.5 min and hard-vs-medium stalemates near the 15-min timeout — so we
-    // assert the weaker pacing invariant (matches resolve before the hard
-    // timeout instead of all-drawing) and treat the 5–10 min band as the next
-    // tuning pass.
-    let full = GameConfig::default();
+fn match_length_p50_within_band() {
+    // M8 target: match length p50 within 5–10 min (300–600s). The bot tiers
+    // are the pacing anchor: rush-vs-turtle must not end instantly, and
+    // hard-vs-medium must not stalemate to the timeout.
+    let full = GameConfig::default(); // 15-minute timeout
     let seeds = seeds();
 
     let medium_easy = median(bot_tier_lengths(
@@ -70,16 +67,15 @@ fn match_length_p50_resolves_before_timeout() {
         || Box::new(crucible_ai::medium()),
     ));
 
+    let band = 5 * 60 * TICKS_PER_SEC..=10 * 60 * TICKS_PER_SEC;
     assert!(
-        medium_easy < full.timeout_ticks,
-        "medium-vs-easy all-stalemated: p50 {}/{} ticks",
-        medium_easy / TICKS_PER_SEC,
-        full.timeout_ticks
+        band.contains(&medium_easy),
+        "medium-vs-easy p50 left the 5–10 min band: {}s",
+        medium_easy / TICKS_PER_SEC
     );
     assert!(
-        hard_medium < full.timeout_ticks,
-        "hard-vs-medium all-stalemated: p50 {}/{} ticks",
-        hard_medium / TICKS_PER_SEC,
-        full.timeout_ticks
+        band.contains(&hard_medium),
+        "hard-vs-medium p50 left the 5–10 min band: {}s",
+        hard_medium / TICKS_PER_SEC
     );
 }

@@ -52,7 +52,10 @@ scheduling, storage, and match execution are injected by `crucible-server`
 
 `scripted.rs` provides deterministic, rule-based opponents used for the
 bootstrap curriculum, gauntlet baselines, and regression tests: easy (passive
-turtle), medium (periodic attack waves), hard (expand-and-push).
+turtle), medium (periodic attack waves), hard (expand-and-push). Their pacing
+was tuned in M8 so match length lands in the 5–10 min band: easy's turrets are
+finite (never rebuilt, so sustained waves eventually break through) and hard
+commits to a heavier push instead of stalling behind static defense.
 
 Baseline bots are **oracle baselines**: they may read the full `Game`
 (including hidden state) via the `Bot::decide(&Game, ...)` signature. This

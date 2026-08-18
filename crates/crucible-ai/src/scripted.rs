@@ -172,12 +172,26 @@ fn enemy_hq_tile(g: &Game, p: Player) -> (u8, u8) {
     g.hq(p.enemy()).map(|b| b.tile).unwrap_or((55, 55))
 }
 
+/// A tile `dist` tiles from `hq` toward `enemy` (clamped to the map).
+fn toward_enemy(hq: (u8, u8), enemy: (u8, u8), dist: i32) -> (u8, u8) {
+    let dx = (enemy.0 as i32 - hq.0 as i32).signum();
+    let dy = (enemy.1 as i32 - hq.1 as i32).signum();
+    (
+        (hq.0 as i32 + dx * dist).clamp(0, 63) as u8,
+        (hq.1 as i32 + dy * dist).clamp(0, 63) as u8,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Easy — passive turtle
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-pub struct EasyBot;
+pub struct EasyBot {
+    /// Number of turrets placed so far; the turtle never rebuilds them, so
+    /// sustained waves eventually break through.
+    built_turrets: u8,
+}
 
 impl Bot for EasyBot {
     fn name(&self) -> &'static str {
@@ -188,28 +202,49 @@ impl Bot for EasyBot {
         let mut out = Vec::new();
         let hq = g.hq(p).map(|b| b.tile).unwrap_or((8, 8));
 
-        // Greedy economy: a passive turtle that invests in harvesters, not
-        // scouting or early defense.
+        // Economy first: refinery + factory + the opening harvesters. The
+        // factory must precede the barracks or the turtle never gets income.
         if let Some(c) = place_if_missing(g, p, BuildingType::Refinery, (hq.0 + 2, hq.1), 1) {
             out.push(c);
         }
         if let Some(c) = place_if_missing(g, p, BuildingType::Factory, (hq.0, hq.1 + 2), 1) {
             out.push(c);
         }
-        if let Some(c) = place_if_missing(g, p, BuildingType::Barracks, (hq.0 + 2, hq.1 + 2), 1) {
+        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Harvester, 4) {
             out.push(c);
         }
-        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Harvester, 8) {
-            out.push(c);
-        }
-        if let Some(c) = train_up_to(g, p, BuildingType::Barracks, UnitType::Infantry, 2) {
-            out.push(c);
-        }
-        // Only fortifies late — too late to stop an early rush. Never attacks.
-        if g.tick > 6_000 {
-            if let Some(c) = place_if_missing(g, p, BuildingType::Turret, (hq.0 - 2, hq.1), 2) {
+
+        // Defense once income is running: a few infantry + one enemy-facing
+        // turret slow the opening rush; the turtle never attacks, so these
+        // delay the inevitable rather than win.
+        if own_building(g, p, BuildingType::Factory).is_some() {
+            if let Some(c) = place_if_missing(g, p, BuildingType::Barracks, (hq.0 + 2, hq.1 + 2), 1)
+            {
                 out.push(c);
             }
+            if let Some(c) = train_up_to(g, p, BuildingType::Barracks, UnitType::Infantry, 6) {
+                out.push(c);
+            }
+            if g.tick > 800 && self.built_turrets < 1 {
+                let t = toward_enemy(hq, enemy_hq_tile(g, p), 2);
+                if let Some(c) = place_if_missing(g, p, BuildingType::Turret, t, 1) {
+                    out.push(c);
+                }
+            }
+            if g.tick > 1_800 && self.built_turrets < 2 {
+                let t = toward_enemy(hq, enemy_hq_tile(g, p), 3);
+                if let Some(c) = place_if_missing(g, p, BuildingType::Turret, t, 2) {
+                    out.push(c);
+                }
+            }
+            self.built_turrets = self
+                .built_turrets
+                .max(count_buildings(g, p, BuildingType::Turret) as u8);
+        }
+
+        // Scale the economy.
+        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Harvester, 8) {
+            out.push(c);
         }
         out
     }
@@ -217,7 +252,7 @@ impl Bot for EasyBot {
 
 /// Public constructor.
 pub fn easy() -> EasyBot {
-    EasyBot
+    EasyBot::default()
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +351,7 @@ impl Bot for HardBot {
             (hq.0, hq.1.wrapping_add(2)),
         ];
         let turrets = count_buildings(g, p, BuildingType::Turret);
-        if turrets < 4 {
+        if turrets < 2 {
             if let Some(tile) = find_build_tile(g, p, BuildingType::Turret, turret_spots[turrets]) {
                 out.push(Command::PlaceBuilding {
                     player: p,
@@ -354,17 +389,17 @@ impl Bot for HardBot {
         }
 
         // Heavy army.
-        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Tank, 6) {
+        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Tank, 9) {
             out.push(c);
         }
-        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Artillery, 3) {
+        if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Artillery, 4) {
             out.push(c);
         }
 
         // Push with a real army, then keep the pressure on.
         let combat = combat_unit_ids(g, p).len();
-        let ready = combat >= 8;
-        let interval_elapsed = g.tick - self.last_attack >= 900;
+        let ready = combat >= 10;
+        let interval_elapsed = g.tick - self.last_attack >= 600;
         if ready && (self.last_attack == 0 || interval_elapsed) {
             if let Some(c) = attack_move(g, p, enemy_hq_tile(g, p)) {
                 out.push(c);

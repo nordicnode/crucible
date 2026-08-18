@@ -273,7 +273,7 @@ mod tests {
             timeout_ticks: 6000,
             ..GameConfig::default()
         };
-        let seeds: Vec<u64> = (0..20).collect();
+        let seeds: Vec<u64> = (0..32).collect();
         let a = counter_matrix(&seeds, &cfg);
         let b = counter_matrix(&seeds, &cfg);
         assert_eq!(a, b);
