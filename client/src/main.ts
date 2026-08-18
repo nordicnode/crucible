@@ -414,6 +414,8 @@ let radarSized = false;
 function resize(): void {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  renderer.camera.setViewport(canvas.width, canvas.height);
+  spectate.renderer.camera.setViewport(window.innerWidth, window.innerHeight);
   radarSized = false;
 }
 window.addEventListener("resize", resize);

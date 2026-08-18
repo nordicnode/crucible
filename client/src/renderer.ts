@@ -15,11 +15,15 @@ import type { Entity } from "./world";
 import { World } from "./world";
 
 const MAP = 64;
+const ZOOM_MIN = 4; // px per tile (whole map visible on a wide screen)
+const ZOOM_MAX = 96; // px per tile (close enough to read unit detail)
 
 export class Camera {
   cx = 32;
   cy = 32;
   zoom = 12; // pixels per tile
+  viewportW = 0;
+  viewportH = 0;
 
   screenX(wx: number): number {
     return (wx - this.cx) * this.zoom;
@@ -33,22 +37,47 @@ export class Camera {
   worldY(sy: number): number {
     return sy / this.zoom + this.cy;
   }
+  /** Remember the viewport size and re-apply the map bounds. */
+  setViewport(vw: number, vh: number): void {
+    this.viewportW = vw;
+    this.viewportH = vh;
+    this.clampToMap();
+  }
+  /**
+   * Keep the visible viewport inside the map. When the viewport is larger
+   * than the map (zoomed way out) the map is centered instead.
+   */
+  clampToMap(): void {
+    if (this.viewportW <= 0 || this.viewportH <= 0) return;
+    const halfW = this.viewportW / 2 / this.zoom;
+    const halfH = this.viewportH / 2 / this.zoom;
+    if (halfW * 2 >= MAP) this.cx = MAP / 2;
+    else this.cx = Math.min(MAP - halfW, Math.max(halfW, this.cx));
+    if (halfH * 2 >= MAP) this.cy = MAP / 2;
+    else this.cy = Math.min(MAP - halfH, Math.max(halfH, this.cy));
+  }
   /** Center the viewport on world point (wx, wy) at the given zoom. */
   focusOn(wx: number, wy: number, zoom: number, vw: number, vh: number): void {
-    this.zoom = Math.min(32, Math.max(4, zoom));
+    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
+    this.viewportW = vw;
+    this.viewportH = vh;
+    // Deliberately unclamped: match start centers on the HQ even when it sits
+    // near a map edge. Pan/zoom apply the bounds from there.
     this.cx = wx - vw / 2 / this.zoom;
     this.cy = wy - vh / 2 / this.zoom;
   }
   pan(dx: number, dy: number): void {
     this.cx -= dx / this.zoom;
     this.cy -= dy / this.zoom;
+    this.clampToMap();
   }
   zoomAt(sx: number, sy: number, factor: number): void {
     const wx = this.worldX(sx);
     const wy = this.worldY(sy);
-    this.zoom = Math.min(32, Math.max(4, this.zoom * factor));
+    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.zoom * factor));
     this.cx = wx - sx / this.zoom;
     this.cy = wy - sy / this.zoom;
+    this.clampToMap();
   }
 }
 
