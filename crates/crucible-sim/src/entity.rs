@@ -129,11 +129,11 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
         },
         Infantry => UnitStats {
             cost: 50,
-            hp: 40,
-            damage: 5,
+            hp: 44,
+            damage: 6,
             range: tiles(1) + FIX_SCALE / 2, // 1.5 tiles
             min_range: 0,
-            speed: 30, // 1.2 tiles/s
+            speed: 34, // ~1.35 tiles/s (closes on artillery)
             cooldown: TICKS_PER_SEC,
             vision: tiles(4),
             splash: 0,
@@ -148,20 +148,21 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             speed: 20, // 0.8 tiles/s
             cooldown: TICKS_PER_SEC * 12 / 10,
             vision: tiles(5),
-            splash: tiles(1),
+            splash: 0,
             build_time: TICKS_PER_SEC * 16,
         },
-        // Balance-tuned: `min_range`/`cooldown` are what keep artillery a soft
-        // counter to tanks (outranged) and soft-countered by infantry (inside
-        // min range). See `crucible-evo/tests/fixtures/balance_baseline.json`.
+        // Balance-tuned for positional combat: `min_range`/`cooldown` keep
+        // artillery a counter to tanks (outranges them) while infantry closes
+        // inside its min range. Tanks carry no splash; they counter infantry
+        // by range + fire rate. See `crucible-evo/tests/fixtures/balance_baseline.json`.
         Artillery => UnitStats {
             cost: 200,
             hp: 60,
-            damage: 35,
+            damage: 32,
             range: tiles(6),
-            min_range: tiles(1),
-            speed: 12, // 0.5 tiles/s
-            cooldown: TICKS_PER_SEC * 15 / 10,
+            min_range: tiles(1) / 2, // 0.5 tile min range
+            speed: 12,               // 0.5 tiles/s
+            cooldown: TICKS_PER_SEC * 18 / 10,
             vision: tiles(6),
             splash: 0,
             build_time: TICKS_PER_SEC * 20,
@@ -247,10 +248,10 @@ pub fn building_produces(bt: BuildingType) -> &'static [UnitType] {
     }
 }
 
-/// Where a building type may be placed (within this radius of an HQ or refinery, in tiles).
-pub const BUILD_RADIUS_TILES: i32 = 24;
-/// A build site must be within this radius of HQ/refinery center (fix units).
-pub const BUILD_RADIUS: Fix = BUILD_RADIUS_TILES * FIX_SCALE;
+/// Where a building may be placed: within this many tiles (center-to-center)
+/// of the *nearest own building*, so bases grow in connected clumps instead
+/// of floating structures. Balance-tuned with the baseline fixture.
+pub const PLACE_RADIUS_TILES: i32 = 5;
 
 /// Aggro radius: units engage enemies they can see (vision == aggro for v1).
 pub const RETREAT_HP_FRACTION_NUM: i32 = 1;
@@ -373,8 +374,10 @@ mod tests {
     }
 
     #[test]
-    fn tank_has_splash() {
-        assert!(unit_stats(UnitType::Tank).splash > 0);
+    fn tank_outranges_infantry() {
+        // Tank beats infantry by range + rate, not splash (see the M8
+        // balance note: splash was removed during positional-combat tuning).
+        assert!(unit_stats(UnitType::Tank).range > unit_stats(UnitType::Infantry).range);
     }
 
     #[test]

@@ -35,13 +35,14 @@ impl Game {
             .filter(|u| u.is_alive() && u.utype == UnitType::Harvester)
             .map(|u| u.id)
             .collect();
+        let blocked = self.blocked_grid();
 
         for uid in ids {
-            self.harvester_tick(uid);
+            self.harvester_tick(uid, &blocked);
         }
     }
 
-    fn harvester_tick(&mut self, uid: EntityId) {
+    fn harvester_tick(&mut self, uid: EntityId, blocked: &[bool]) {
         let Some(idx) = self.units.iter().position(|u| u.id == uid) else {
             return;
         };
@@ -74,13 +75,13 @@ impl Game {
         if threat {
             new_fleeing = true;
             let dest = self.flee_dest(owner, pos);
-            let (p, _) = follow(&self.map, &mut new_path, pos, dest, speed);
+            let (p, _) = follow(&self.map, blocked, &mut new_path, pos, dest, speed);
             new_pos = p;
             new_order = UnitOrder::Flee { dest };
         } else if let UnitOrder::Move { waypoint, .. } = order {
             // Manual move: honor it, then resume harvesting.
             new_fleeing = false;
-            let (p, _) = follow(&self.map, &mut new_path, pos, waypoint, speed);
+            let (p, _) = follow(&self.map, blocked, &mut new_path, pos, waypoint, speed);
             new_pos = p;
             if new_path.is_empty() && new_pos.tile() == waypoint.tile() {
                 new_order = UnitOrder::Idle;
@@ -100,7 +101,8 @@ impl Game {
                             new_carrying = 0;
                             new_harvest_tile = None;
                         } else {
-                            let (p, _) = follow(&self.map, &mut new_path, pos, bpos, speed);
+                            let (p, _) =
+                                follow(&self.map, blocked, &mut new_path, pos, bpos, speed);
                             new_pos = p;
                         }
                     }
@@ -122,7 +124,7 @@ impl Game {
                             new_carrying += taken;
                         }
                     } else {
-                        let (p, _) = follow(&self.map, &mut new_path, pos, tc, speed);
+                        let (p, _) = follow(&self.map, blocked, &mut new_path, pos, tc, speed);
                         new_pos = p;
                     }
                 }
@@ -192,21 +194,22 @@ impl Game {
 /// Follow `path` one step toward `dest` (recomputing if empty).
 fn follow(
     map: &crate::map::Map,
+    blocked: &[bool],
     path: &mut Vec<(u8, u8)>,
     pos: Pos,
     dest: Pos,
     speed: i32,
 ) -> (Pos, bool) {
     if path.is_empty() {
-        if let Some(p) = map.find_path(pos.tile(), dest.tile()) {
+        if let Some(p) = map.find_path(pos.tile(), dest.tile(), blocked) {
             *path = p;
         }
     }
     let Some(next) = path.first().copied() else {
-        return (step_towards(map, pos, dest, speed).0, true);
+        return (step_towards(map, blocked, pos, dest, speed).0, true);
     };
     let ndest = Pos::from_tile(next.0, next.1);
-    let (p, arrived) = step_towards(map, pos, ndest, speed);
+    let (p, arrived) = step_towards(map, blocked, pos, ndest, speed);
     if arrived || p.tile() == next {
         path.remove(0);
     }

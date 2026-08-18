@@ -4,11 +4,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::entity::{
-    building_stats, unit_stats, Building, BuildingType, EntityId, Player, Unit, Upgrade,
+    building_stats, unit_stats, Building, BuildingType, EntityId, Player, Unit, UnitType, Upgrade,
 };
 use crate::fixed::{dist2, Pos, COMMAND_TICK, MATCH_TIMEOUT_TICKS, TICKS_PER_SEC};
 use crate::fog::FogMemory;
 use crate::map::Map;
+use crate::movement::formation_tile;
 use crate::orders::{Command, CommandError};
 
 /// Runtime-tunable match settings. Tests override via a builder.
@@ -29,7 +30,7 @@ impl Default for GameConfig {
         GameConfig {
             max_queue: 5,
             apm_cap: 120,
-            starting_ore: 500,
+            starting_ore: 450,
             sell_refund_num: 1,
             sell_refund_den: 2,
             timeout_ticks: MATCH_TIMEOUT_TICKS,
@@ -160,7 +161,7 @@ impl Game {
             next_id += 1;
         }
         let ore = [config.starting_ore; 2];
-        Game {
+        let mut g = Game {
             config: config.clone(),
             map,
             buildings,
@@ -178,7 +179,26 @@ impl Game {
             events: Vec::new(),
             dropped_commands: [0, 0],
             fog: [FogMemory::default(), FogMemory::default()],
+        };
+        // Each side starts with one Harvester so the mining loop is visible
+        // from the first second (spawned adjacent to the HQ).
+        let hq_tiles = g.map.hq_tiles;
+        for (p, tile) in Player::ALL.iter().zip(hq_tiles.iter()) {
+            if let Some(t) = g.pick_spawn_tile(*tile) {
+                g.spawn_unit(*p, UnitType::Harvester, t, None);
+            }
         }
+        g
+    }
+
+    /// Per-tile blocked overlay: tiles occupied by a building (terrain
+    /// passability is separate, in [`Map::passable`]).
+    pub fn blocked_grid(&self) -> Vec<bool> {
+        let mut b = vec![false; crate::map::MAP_TILES];
+        for x in &self.buildings {
+            b[crate::map::tile_index(x.tile.0, x.tile.1)] = true;
+        }
+        b
     }
 
     pub fn alloc_id(&mut self) -> EntityId {
@@ -322,14 +342,17 @@ impl Game {
                 stance,
                 ..
             } => {
-                let dest = Pos::from_tile(waypoint.0, waypoint.1);
-                // Precompute paths before mutating units (borrow rules + determinism).
+                // Spread the group around the waypoint (formation) so units do
+                // not all converge on one tile; each unit paths to its own
+                // offset destination. Deterministic by unit index.
+                let blocked = self.blocked_grid();
                 let mut moves: Vec<(EntityId, Vec<(u8, u8)>)> = Vec::new();
-                for id in units {
+                for (i, id) in units.iter().enumerate() {
                     if let Some(u) = self.unit(player, *id) {
+                        let tile = formation_tile(*waypoint, i, &self.map, &blocked);
                         let path = self
                             .map
-                            .find_path(u.pos.tile(), *waypoint)
+                            .find_path(u.pos.tile(), tile, &blocked)
                             .unwrap_or_default();
                         moves.push((*id, path));
                     }
@@ -337,6 +360,11 @@ impl Game {
                 for (id, path) in moves {
                     if let Some(u) = self.unit_mut(player, id) {
                         u.stance = *stance;
+                        let dest = path
+                            .last()
+                            .copied()
+                            .map(|t| Pos::from_tile(t.0, t.1))
+                            .unwrap_or_else(|| Pos::from_tile(waypoint.0, waypoint.1));
                         u.order = crate::entity::UnitOrder::Move {
                             waypoint: dest,
                             stance: *stance,
@@ -459,8 +487,16 @@ mod tests {
     fn starts_with_two_hqs_and_ore() {
         let g = game();
         assert_eq!(g.buildings.len(), 2);
-        assert_eq!(g.ore, [500, 500]);
+        assert_eq!(g.ore, [450, 450]);
         assert_eq!(g.tick, 0);
+        // Each side starts with one harvester (visible mining loop).
+        assert_eq!(
+            g.units
+                .iter()
+                .filter(|u| u.utype == UnitType::Harvester)
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -479,7 +515,7 @@ mod tests {
             )
             .remove(0);
         assert_eq!(err, Err(CommandError::NotABuilding));
-        // Far from P0's HQ (8,8): outside the build radius.
+        // Far from P0's HQ (8,8): outside the placement radius.
         let err = g
             .apply_commands(
                 Player::P0,
@@ -508,7 +544,7 @@ mod tests {
             }],
         );
         assert_eq!(res, vec![Ok(())]);
-        assert_eq!(g.ore[0], 200);
+        assert_eq!(g.ore[0], 150);
         assert_eq!(g.buildings.len(), 3);
     }
 

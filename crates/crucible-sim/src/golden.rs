@@ -16,9 +16,9 @@ pub const SEED: u64 = 12345;
 /// Golden snapshot hashes (FNV-1a over `serialize::snapshot_bytes`).
 /// Recorded after auditing the sim for the v1 determinism contract; if any
 /// change alters sim behavior these change and the tests fail.
-pub const GOLDEN_100: u64 = 1961289812933995130;
-pub const GOLDEN_1000: u64 = 187858308740134226;
-pub const GOLDEN_10000: u64 = 9035103704727911103;
+pub const GOLDEN_100: u64 = 6168057688568014409;
+pub const GOLDEN_1000: u64 = 18099781256327125357;
+pub const GOLDEN_10000: u64 = 13570111514896906280;
 
 pub fn fnv1a(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -216,9 +216,9 @@ pub fn combat_hashes() -> [u64; 3] {
 
 /// The committed combat-golden values, in the same order as [`combat_hashes`].
 pub const COMBAT_GOLDEN: [u64; 3] = [
-    6901326970294770567,
-    7303699409838063195,
-    5042153433581969206,
+    16302708391626114096,
+    8559822098778441665,
+    706564164954152119,
 ];
 
 /// The three golden snapshot hashes in `[tick 100, tick 1000, tick 10000]`

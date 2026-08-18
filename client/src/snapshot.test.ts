@@ -67,3 +67,37 @@ describe("snapshot mapping", () => {
     expect(w.result).toEqual({ winner: 1, reason: "HqDestroyed" });
   });
 });
+
+describe("movement interpolation", () => {
+  it("interpolates display positions toward the authoritative target", () => {
+    const w = new World();
+    w.setMap(7, metaFixture().passable, [[8, 8], [55, 55]]);
+    const unit = (x: number, y: number) => [
+      { id: 3, kind: "Infantry", owner: 0, x, y, hp: 40, maxHp: 40 },
+    ];
+    w.applyDiff(10, 0, unit(10, 10), [], [], []);
+    // New entity snaps to its first reported position.
+    expect(w.pos(3)).toEqual({ x: 10, y: 10 });
+
+    // Target moves to 12,12; display follows gradually (50ms → half way).
+    w.applyDiff(11, 0, unit(12, 12), [], [], []);
+    w.advance(50);
+    const p = w.pos(3);
+    expect(p.x).toBeGreaterThan(10);
+    expect(p.x).toBeLessThan(12);
+    expect(p.x).toBeCloseTo(11, 5);
+    expect(p.y).toBeCloseTo(11, 5);
+  });
+
+  it("drops display state for removed entities", () => {
+    const w = new World();
+    w.setMap(7, metaFixture().passable, [[8, 8], [55, 55]]);
+    const unit = (x: number, y: number) => [
+      { id: 3, kind: "Infantry", owner: 0, x, y, hp: 40, maxHp: 40 },
+    ];
+    w.applyDiff(10, 0, unit(1, 1), [], [], []);
+    w.applyDiff(11, 0, [], [], [], []);
+    expect(w.entities.has(3)).toBe(false);
+    expect(w.display.has(3)).toBe(false);
+  });
+});

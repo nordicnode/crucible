@@ -51,11 +51,25 @@ and injected.
 4. `production_phase` — queues progress; completed units spawn (id order).
 5. `combat_phase` — per combat unit: acquire target, move, fire (id order).
 6. `turret_phase` — turrets fire (id order).
-7. `sweep_dead` — dead entities removed.
-8. `fog_phase` — visibility recomputed; last-seen memory updated.
-9. `check_win` — HQ destroyed, or timeout by remaining value.
+7. `separation_phase` — overlapping units are pushed apart (later id moves).
+8. `sweep_dead` — dead entities removed.
+9. `fog_phase` — visibility recomputed; last-seen memory updated.
+10. `check_win` — HQ destroyed, or timeout by remaining value.
 
 Reordering these changes determinism and requires a golden-hash update.
+
+## 3a. Movement contract
+
+- Buildings are **blocking**: `step_towards`/`find_path` take a per-tick
+  `blocked` overlay (building tiles), so units path around and never walk
+  through buildings. `Game::blocked_grid()` builds the overlay.
+- `MoveGroup` spreads the group around the waypoint in a deterministic
+  one-tile ring (`movement::formation_tile`), so a group arrives as a cluster
+  instead of stacking on one tile.
+- Units never stack: `separation_phase` pushes overlapping units apart in
+  ascending-id order (only the later id moves).
+- Each side starts with **one Harvester** adjacent to its HQ (visible mining
+  loop from tick 0).
 
 ## 4. Command & validation contract
 
@@ -68,9 +82,10 @@ Reordering these changes determinism and requires a golden-hash update.
   token bucket in `ApmBudget`; over-budget commands return `RateLimited` and
   increment `dropped_commands`.
 - Economy rules: train cost is charged at queue time; sell refunds 50%;
-  building placement requires the build radius around own HQ/refinery, a
-  passable, ore-free, unoccupied tile; artillery production requires a Tech
-  Lab; Tech Lab placement requires a Factory; the upgrade is chosen once.
+  building placement requires a passable, ore-free, unoccupied tile within
+  `PLACE_RADIUS_TILES` (5) of the *nearest own building* — bases grow in
+  connected clumps, not scattered structures; artillery production requires a
+  Tech Lab; Tech Lab placement requires a Factory; the upgrade is chosen once.
 
 ## 5. Fog-of-war contract
 

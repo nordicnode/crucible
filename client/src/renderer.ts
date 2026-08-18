@@ -1,6 +1,16 @@
-// Flat-color Canvas 2D renderer: terrain, fog-of-war, entities, selection,
-// HP bars, and a minimap. All positions are world tile coordinates.
+// High-detail Canvas 2D tactical renderer for Crucible:
+// Procedural vector terrain, animated ore nodes, detailed team-colored buildings,
+// rotating directional units, sci-fi selection reticles, and tactical minimap.
 
+import {
+  drawBuildingSprite,
+  drawHealthBar,
+  drawImpassableTile,
+  drawOreDeposit,
+  drawPassableTile,
+  drawSelectionReticle,
+  drawUnitSprite,
+} from "./sprites";
 import type { Entity } from "./world";
 import { World } from "./world";
 
@@ -23,6 +33,12 @@ export class Camera {
   worldY(sy: number): number {
     return sy / this.zoom + this.cy;
   }
+  /** Center the viewport on world point (wx, wy) at the given zoom. */
+  focusOn(wx: number, wy: number, zoom: number, vw: number, vh: number): void {
+    this.zoom = Math.min(32, Math.max(4, zoom));
+    this.cx = wx - vw / 2 / this.zoom;
+    this.cy = wy - vh / 2 / this.zoom;
+  }
   pan(dx: number, dy: number): void {
     this.cx -= dx / this.zoom;
     this.cy -= dy / this.zoom;
@@ -38,11 +54,11 @@ export class Camera {
 
 const COLORS = {
   unexplored: "#04060a",
-  passable: "#17301c",
-  impassable: "#2c2f33",
-  ore: "#c8920e",
-  own: "#4da3ff",
-  enemy: "#ff5a5a",
+  passable: "#16281c",
+  impassable: "#22272e",
+  ore: "#eab308",
+  own: "#2563eb",
+  enemy: "#dc2626",
   selected: "#ffe27a",
 };
 
@@ -59,46 +75,51 @@ export class Renderer {
     const x1 = Math.min(MAP - 1, Math.ceil(cam.worldX(w)));
     const y1 = Math.min(MAP - 1, Math.ceil(cam.worldY(h)));
 
-    // Terrain + fog.
+    // 1. Terrain + Fog of War
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
         const idx = ty * MAP + tx;
+        const isVis = world.visible.has(idx);
+        const isExp = world.explored.has(idx);
+        if (!isVis && !isExp) continue; // Unexplored void
+
         const px = cam.screenX(tx);
         const py = cam.screenY(ty);
         const size = cam.zoom + 0.5;
-        if (world.visible.has(idx)) {
-          ctx.fillStyle = world.passable[idx] ? COLORS.passable : COLORS.impassable;
-        } else if (world.explored.has(idx)) {
-          ctx.fillStyle = world.passable[idx] ? "#0c1a10" : "#17191c";
+        const isPassable = world.passable[idx] ?? true;
+
+        if (isPassable) {
+          drawPassableTile(ctx, tx, ty, px, py, size, !isVis);
         } else {
-          continue; // already filled dark
+          drawImpassableTile(ctx, tx, ty, px, py, size, !isVis);
         }
-        ctx.fillRect(px, py, size, size);
       }
     }
 
-    // Known ore fields.
+    // 2. Ore Fields (Luminous Crystal Deposits)
     for (const t of world.oreTiles.values()) {
       const px = cam.screenX(t.x);
       const py = cam.screenY(t.y);
-      const size = cam.zoom + 0.5;
+      const size = cam.zoom;
       if (px > w || py > h || px + size < 0 || py + size < 0) continue;
-      ctx.fillStyle = COLORS.ore;
-      ctx.fillRect(px + size * 0.3, py + size * 0.3, size * 0.4, size * 0.4);
+      drawOreDeposit(ctx, px, py, size, t.amount, world.tick);
     }
 
-    // Entities: buildings first, then units.
+    // 3. Entities: Buildings first (so units appear on top), then units
     const drawList = [...world.entities.values()].sort((a, b) => {
-      const aUnit = !a.kind.startsWith("Hq") && isUnit(a);
-      const bUnit = !b.kind.startsWith("Hq") && isUnit(b);
+      const aUnit = isUnit(a);
+      const bUnit = isUnit(b);
       if (aUnit !== bUnit) return aUnit ? 1 : -1;
       return a.id - b.id;
     });
+
     for (const e of drawList) {
       this.drawEntity(ctx, world, e, selection, w, h);
     }
 
-    this.drawMinimap(ctx, world, selection, w, h);
+    // The radar minimap is drawn separately into the DOM sidebar canvas
+    // (`drawRadar`), so it lives in the C&C-style frame instead of floating
+    // over the map.
   }
 
   private drawEntity(
@@ -110,144 +131,132 @@ export class Renderer {
     h: number,
   ): void {
     const cam = this.camera;
-    const px = cam.screenX(e.x);
-    const py = cam.screenY(e.y);
+    const p = world.pos(e.id);
+    const px = cam.screenX(p.x);
+    const py = cam.screenY(p.y);
     const z = cam.zoom;
-    if (px < -z || py < -z || px > w + z || py > h + z) return;
+    if (px < -z * 2 || py < -z * 2 || px > w + z * 2 || py > h + z * 2) return;
 
-    // Fade remembered (stale) enemies.
+    // Fade remembered (stale) enemy radar blips
+    let isStale = false;
     let alpha = 1;
     if (e.owner === 1 && e.stale != null) {
+      isStale = true;
       const age = Math.max(0, world.tick - e.stale);
-      alpha = Math.max(0.15, 1 - age / 600);
+      alpha = Math.max(0.2, 1 - age / 600);
     }
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    const color = e.owner === 0 ? COLORS.own : COLORS.enemy;
+
+    const isSelected = e.owner === 0 && selection.has(e.id);
 
     if (isUnit(e)) {
-      this.drawUnitShape(ctx, e, px, py, z, color);
+      const heading = world.heading(e.id);
+      drawUnitSprite(ctx, e.kind, px, py, z, e.owner, heading, world.tick, isStale, 0);
     } else {
-      this.drawBuildingShape(ctx, e, px, py, z, color);
+      drawBuildingSprite(
+        ctx,
+        e.kind,
+        px,
+        py,
+        z,
+        e.owner,
+        world.tick,
+        isStale,
+        e.progress ?? 0,
+        e.buildTime ?? 0,
+      );
     }
 
-    // Selection ring.
-    if (e.owner === 0 && selection.has(e.id)) {
-      ctx.strokeStyle = COLORS.selected;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(px - z * 0.5, py - z * 0.5, z, z);
+    // Sci-fi 4-corner Selection Reticle
+    if (isSelected) {
+      const reticleSize = isUnit(e) ? z * 0.9 : z * 1.15;
+      drawSelectionReticle(ctx, px, py, reticleSize, world.tick);
     }
 
-    // HP bar for own entities with hp info.
+    // HP Bar for own entities with HP
     if (e.owner === 0 && e.maxHp > 0) {
-      const frac = Math.max(0, e.hp / e.maxHp);
-      ctx.fillStyle = "#0a0a0a";
-      ctx.fillRect(px - z * 0.4, py - z * 0.7, z * 0.8, 3);
-      ctx.fillStyle = frac > 0.5 ? "#4ade80" : frac > 0.25 ? "#facc15" : "#ef4444";
-      ctx.fillRect(px - z * 0.4, py - z * 0.7, z * 0.8 * frac, 3);
+      const barSize = isUnit(e) ? z * 0.8 : z * 1.1;
+      drawHealthBar(ctx, px, py, barSize, e.hp, e.maxHp);
     }
+
     ctx.restore();
   }
 
-  private drawUnitShape(
-    ctx: CanvasRenderingContext2D,
-    e: Entity,
-    px: number,
-    py: number,
-    z: number,
-    color: string,
-  ): void {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    switch (e.kind) {
-      case "Infantry":
-        ctx.arc(px, py, z * 0.28, 0, Math.PI * 2);
-        break;
-      case "Tank":
-        ctx.moveTo(px, py - z * 0.3);
-        ctx.lineTo(px - z * 0.3, py + z * 0.3);
-        ctx.lineTo(px + z * 0.3, py + z * 0.3);
-        break;
-      case "Artillery":
-        ctx.moveTo(px, py - z * 0.35);
-        ctx.lineTo(px + z * 0.3, py);
-        ctx.lineTo(px, py + z * 0.35);
-        ctx.lineTo(px - z * 0.3, py);
-        break;
-      case "Harvester":
-        ctx.rect(px - z * 0.25, py - z * 0.25, z * 0.5, z * 0.5);
-        break;
-    }
-    ctx.closePath();
-    ctx.fill();
-  }
+}
 
-  private drawBuildingShape(
-    ctx: CanvasRenderingContext2D,
-    e: Entity,
-    px: number,
-    py: number,
-    z: number,
-    color: string,
-  ): void {
-    ctx.fillStyle = color;
-    const s = e.kind === "Hq" ? 0.5 : 0.4;
-    if (e.kind === "Turret") {
-      ctx.beginPath();
-      ctx.arc(px, py, z * 0.35, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.fillRect(px - z * s, py - z * s, z * s * 2, z * s * 2);
-      if (e.kind === "Hq") {
-        ctx.fillStyle = "#0a0a0a";
-        ctx.fillRect(px - z * 0.2, py - z * 0.2, z * 0.4, z * 0.4);
+/**
+ * Draw the tactical radar into a dedicated DOM canvas (the C&C-style frame in
+ * the sidebar). `vw`/`vh` are the main viewport dimensions used to compute the
+ * camera viewport rectangle.
+ */
+export function drawRadar(
+  ctx: CanvasRenderingContext2D,
+  world: World,
+  cam: Camera,
+  selection: Set<number>,
+  vw: number,
+  vh: number,
+): void {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const s = Math.min(W / MAP, H / MAP);
+  const ox = (W - MAP * s) / 2;
+  const oy = (H - MAP * s) / 2;
+
+  // Steel-dark radar screen: unexplored reads as a panel, not black void.
+  ctx.fillStyle = "#131b24";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#0e141c";
+  ctx.fillRect(ox, oy, MAP * s, MAP * s);
+
+  for (let ty = 0; ty < MAP; ty++) {
+    for (let tx = 0; tx < MAP; tx++) {
+      const idx = ty * MAP + tx;
+      if (world.visible.has(idx)) {
+        ctx.fillStyle = world.passable[idx] ? "#284d33" : "#3a4654";
+      } else if (world.explored.has(idx)) {
+        ctx.fillStyle = world.passable[idx] ? "#16271c" : "#1c242e";
+      } else {
+        ctx.fillStyle = "#101720";
       }
+      ctx.fillRect(ox + tx * s, oy + ty * s, Math.ceil(s), Math.ceil(s));
     }
   }
 
-  private drawMinimap(
-    ctx: CanvasRenderingContext2D,
-    world: World,
-    selection: Set<number>,
-    w: number,
-    h: number,
-  ): void {
-    const s = 4; // px per tile
-    const ox = w - MAP * s - 8;
-    const oy = h - MAP * s - 8;
-    ctx.fillStyle = "rgba(0,0,0,0.65)";
-    ctx.fillRect(ox - 2, oy - 2, MAP * s + 4, MAP * s + 4);
-
-    for (let ty = 0; ty < MAP; ty++) {
-      for (let tx = 0; tx < MAP; tx++) {
-        const idx = ty * MAP + tx;
-        if (world.visible.has(idx)) {
-          ctx.fillStyle = "#3b5b44";
-        } else if (world.explored.has(idx)) {
-          ctx.fillStyle = "#141a16";
-        } else {
-          continue;
-        }
-        ctx.fillRect(ox + tx * s, oy + ty * s, s, s);
-      }
-    }
-    for (const e of world.entities.values()) {
-      ctx.fillStyle = e.owner === 0 ? COLORS.own : COLORS.enemy;
-      ctx.fillRect(ox + e.x * s - 1, oy + e.y * s - 1, 2, 2);
-    }
-    if (selection.size > 0) {
-      for (const id of selection) {
-        const e = world.entities.get(id);
-        if (e) {
-          ctx.fillStyle = COLORS.selected;
-          ctx.fillRect(ox + e.x * s - 1, oy + e.y * s - 1, 2, 2);
-        }
-      }
+  // Ore fields: bright gold dots.
+  for (const t of world.oreTiles.values()) {
+    if (t.amount > 0) {
+      ctx.fillStyle = "#ffd75e";
+      ctx.fillRect(ox + t.x * s, oy + t.y * s, Math.max(1, Math.ceil(s)), Math.max(1, Math.ceil(s)));
     }
   }
+
+  // Entities: own = blue, enemy = red, selected = gold.
+  for (const e of world.entities.values()) {
+    const p = world.pos(e.id);
+    const isSel = selection.has(e.id);
+    ctx.fillStyle = isSel ? COLORS.selected : e.owner === 0 ? COLORS.own : COLORS.enemy;
+    const dot = isUnit(e) ? 2 : 3;
+    ctx.fillRect(ox + Math.floor(p.x * s) - 1, oy + Math.floor(p.y * s) - 1, dot, dot);
+  }
+
+  // Camera viewport rectangle.
+  const px = (cam.worldX(0) / MAP) * (MAP * s);
+  const py = (cam.worldY(0) / MAP) * (MAP * s);
+  const pw = Math.min(MAP * s, (vw / cam.zoom) * s);
+  const ph = Math.min(MAP * s, (vh / cam.zoom) * s);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ox + Math.max(0, px), oy + Math.max(0, py), Math.max(2, pw), Math.max(2, ph));
+
+  // Scanline sheen for the radar feel.
+  ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
 }
 
 function isUnit(e: Entity): boolean {
   return ["Harvester", "Infantry", "Tank", "Artillery"].includes(e.kind);
 }
+

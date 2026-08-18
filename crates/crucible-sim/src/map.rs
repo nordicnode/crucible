@@ -77,13 +77,24 @@ impl Map {
         taken
     }
 
-    /// Deterministic A* over the static passable grid (8-dir, no corner
-    /// cutting). Units do not block movement in v1.
-    pub fn find_path(&self, from: (u8, u8), to: (u8, u8)) -> Option<Vec<(u8, u8)>> {
+    /// Deterministic A* over the passable grid (8-dir, no corner cutting).
+    /// `blocked` is a dynamic overlay (buildings): a tile is traversable iff
+    /// it is passable terrain and not marked blocked. Pass an all-false grid
+    /// for terrain-only routing.
+    pub fn find_path(
+        &self,
+        from: (u8, u8),
+        to: (u8, u8),
+        blocked: &[bool],
+    ) -> Option<Vec<(u8, u8)>> {
         if from == to {
             return Some(vec![]);
         }
-        if !self.is_passable(from.0, from.1) || !self.is_passable(to.0, to.1) {
+        if !self.is_passable(from.0, from.1)
+            || !self.is_passable(to.0, to.1)
+            || blocked[tile_index(from.0, from.1)]
+            || blocked[tile_index(to.0, to.1)]
+        {
             return None;
         }
 
@@ -136,6 +147,9 @@ impl Map {
 
             for (nx, ny, step) in self.neighbors(cx, cy) {
                 let nidx = tile_index(nx, ny);
+                if blocked[nidx] {
+                    continue;
+                }
                 let tentative = g_score[cur] + step;
                 if tentative < g_score[nidx] {
                     g_score[nidx] = tentative;
@@ -443,16 +457,20 @@ mod tests {
     fn path_between_hqs_exists() {
         for seed in 0..200u64 {
             let map = Map::generate(seed);
-            let p = map.find_path(map.hq_tiles[0], map.hq_tiles[1]);
+            let p = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked());
             assert!(p.is_some(), "no path between HQs for seed {seed}");
         }
+    }
+
+    fn empty_blocked() -> Vec<bool> {
+        vec![false; MAP_TILES]
     }
 
     #[test]
     fn pathfinding_is_deterministic() {
         let map = Map::generate(12345);
-        let a = map.find_path(map.hq_tiles[0], map.hq_tiles[1]);
-        let b = map.find_path(map.hq_tiles[0], map.hq_tiles[1]);
+        let a = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked());
+        let b = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked());
         assert_eq!(a, b);
         // A* on a connected map never returns a path that re-enters start.
         let path = a.unwrap();

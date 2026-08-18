@@ -126,8 +126,16 @@ fn tanks_beat_equal_cost_infantry() {
     for _ in 0..1200 {
         g.step();
     }
-    let p1_infantry = g.units.iter().filter(|u| u.owner == Player::P1).count();
-    let p0_tanks = g.units.iter().filter(|u| u.owner == Player::P0).count();
+    let p1_infantry = g
+        .units
+        .iter()
+        .filter(|u| u.owner == Player::P1 && u.utype == UnitType::Infantry)
+        .count();
+    let p0_tanks = g
+        .units
+        .iter()
+        .filter(|u| u.owner == Player::P0 && u.utype == UnitType::Tank)
+        .count();
     assert_eq!(p1_infantry, 0, "infantry survived the tank push");
     assert!(p0_tanks > 0, "tanks were wiped out");
 }

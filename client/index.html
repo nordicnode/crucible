@@ -8,36 +8,143 @@
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; overflow: hidden; }
-      body { background: #05070a; color: #d7dbe0; font-family: system-ui, sans-serif; font-size: 14px; }
+      body {
+        background: #05070a; color: #d7dbe0;
+        font-family: "Segoe UI", system-ui, sans-serif; font-size: 14px;
+        user-select: none;
+      }
+
+      /* --- C&C-style steel panels --------------------------------------- */
+      .steel {
+        background: linear-gradient(180deg, #39444f 0%, #2b343d 55%, #232c34 100%);
+        border: 1px solid #0d1218;
+        box-shadow:
+          inset 1px 1px 0 rgba(255, 255, 255, 0.14),
+          inset -1px -1px 0 rgba(0, 0, 0, 0.55),
+          0 2px 8px rgba(0, 0, 0, 0.5);
+        color: #e6ecf2;
+      }
+      .steel-title {
+        font-size: 10px; letter-spacing: 0.22em; font-weight: 700;
+        color: #9fb2c4; text-transform: uppercase;
+        padding: 3px 8px; border-bottom: 1px solid #0d1218;
+        background: rgba(0, 0, 0, 0.25);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+
       #view { display: block; position: absolute; inset: 0; cursor: crosshair; }
-      .hud { position: absolute; background: rgba(10, 14, 18, 0.85); border: 1px solid #232b34; border-radius: 6px; padding: 8px 10px; }
-      #topbar { top: 8px; left: 8px; right: 8px; display: flex; gap: 16px; align-items: center; }
-      #topbar .title { font-weight: 700; letter-spacing: 0.12em; }
-      #ore { color: #c8920e; }
-      #build-panel { bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
-      .btn { background: #1b222b; border: 1px solid #333d49; color: #d7dbe0; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
-      .btn:hover { background: #26303a; }
-      .btn:disabled { opacity: 0.4; cursor: default; }
-      .btn.armed { background: #3a3c1b; border-color: #c8920e; }
-      #selection { top: 60px; left: 8px; min-width: 180px; }
-      #log { bottom: 60px; left: 8px; max-width: 340px; font-size: 12px; }
-      #log div { color: #8f99a3; }
-      #overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); }
-      .panel { background: #0c1116; border: 1px solid #2b3540; border-radius: 8px; padding: 24px; max-width: 480px; text-align: center; }
-      .panel h1 { font-size: 1.3rem; letter-spacing: 0.15em; margin: 0 0 16px; }
+
+      /* --- Top bar -------------------------------------------------------- */
+      #topbar {
+        position: absolute; top: 8px; left: 8px; right: 252px;
+        display: flex; align-items: center; gap: 18px;
+        padding: 6px 12px; border-radius: 4px; z-index: 5;
+      }
+      #topbar .title { font-weight: 800; letter-spacing: 0.18em; color: #ffd75e; font-size: 15px; }
+      #topbar .opp { color: #aebcc9; }
+      #topbar .spacer { flex: 1; }
+      #topbar .res { display: flex; align-items: baseline; gap: 6px; }
+      #topbar .res .k { font-size: 10px; letter-spacing: 0.12em; color: #8fa3b5; text-transform: uppercase; }
+      #ore { color: #ffd75e; font-weight: 700; font-size: 16px; min-width: 44px; text-align: right; }
+      #income { color: #7fd08a; font-size: 11px; }
+      #workers { color: #9fd0ff; font-weight: 700; }
+      #clock { color: #e6ecf2; font-weight: 700; letter-spacing: 0.08em; min-width: 42px; text-align: right; }
+
+      /* --- Right command sidebar ------------------------------------------- */
+      #sidebar {
+        position: absolute; top: 8px; right: 8px; bottom: 8px;
+        width: 236px; display: flex; flex-direction: column; gap: 8px;
+        padding: 8px; border-radius: 4px; z-index: 5;
+      }
+      #sel-card { border-radius: 4px; flex: 0 0 auto; }
+      #sel-card .body { padding: 8px 10px; min-height: 62px; }
+      #sel-name { font-weight: 700; color: #ffffff; }
+      #sel-detail { color: #aebcc9; font-size: 12px; margin-top: 2px; line-height: 1.4; }
+      .hpwrap { margin-top: 6px; height: 7px; background: #141b22; border: 1px solid #0a0e12; border-radius: 2px; overflow: hidden; }
+      .hpwrap > div { height: 100%; background: linear-gradient(180deg, #6ee07a, #2f9e44); }
+      .queue { margin-top: 6px; font-size: 12px; color: #cfd9e2; }
+      .queue-bar { height: 4px; background: #141b22; border-radius: 2px; margin-top: 3px; overflow: hidden; }
+      .queue-bar > div { height: 100%; background: #ffd75e; }
+
+      #cmd-menu { border-radius: 4px; flex: 1 1 auto; overflow-y: auto; }
+      #cmd-menu .grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px;
+      }
+      .cmd {
+        position: relative; background: linear-gradient(180deg, #3d4a57, #2b343d);
+        border: 1px solid #0d1218; border-radius: 3px; color: #e6ecf2;
+        box-shadow: inset 1px 1px 0 rgba(255,255,255,0.14), inset -1px -1px 0 rgba(0,0,0,0.5);
+        padding: 8px 6px 16px; cursor: pointer; text-align: left;
+        font-family: inherit; font-size: 12.5px; font-weight: 600;
+      }
+      .cmd:hover { filter: brightness(1.15); }
+      .cmd.armed { border-color: #ffd75e; box-shadow: 0 0 0 1px #ffd75e, inset 1px 1px 0 rgba(255,255,255,0.14); }
+      .cmd.disabled { opacity: 0.45; cursor: default; }
+      .cmd.disabled:hover { filter: none; }
+      .cmd .cost {
+        position: absolute; right: 4px; bottom: 3px; font-size: 10.5px;
+        color: #ffd75e; letter-spacing: 0.04em;
+      }
+      .cmd .ic { display: block; font-size: 17px; line-height: 1.1; margin-bottom: 3px; }
+      #cmd-empty { padding: 10px; color: #8fa3b5; font-size: 12px; line-height: 1.5; }
+
+      /* --- Radar ------------------------------------------------------------ */
+      #radar-block { border-radius: 4px; flex: 0 0 auto; }
+      #radar-wrap { padding: 6px; }
+      #radar {
+        display: block; width: 100%; height: 132px;
+        background: #131b24;
+        border: 2px solid #0d1218; border-radius: 2px;
+        box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.8), 0 0 0 1px #4a5866;
+        cursor: crosshair;
+      }
+
+      /* --- Event log --------------------------------------------------------- */
+      #log {
+        position: absolute; bottom: 8px; left: 8px; width: 300px;
+        border-radius: 4px; z-index: 4;
+      }
+      #log .body { padding: 6px 10px; font-size: 12px; max-height: 132px; overflow-y: auto; }
+      #log .body div { color: #aebcc9; line-height: 1.5; }
+
+      /* --- Shared bits ------------------------------------------------------- */
+      #tooltip {
+        position: absolute; pointer-events: none; z-index: 20;
+        background: #141b22; border: 1px solid #4a5866; border-radius: 3px;
+        padding: 4px 8px; font-size: 12px; color: #e6ecf2; display: none; white-space: nowrap;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+      }
+      #spectate-bar {
+        position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 8px; align-items: center;
+        padding: 8px 12px; border-radius: 4px; z-index: 5;
+      }
+      #spectate-bar input[type="range"] { width: 200px; accent-color: #ffd75e; }
+
+      .btn {
+        background: linear-gradient(180deg, #3d4a57, #2b343d);
+        border: 1px solid #0d1218; color: #e6ecf2; border-radius: 3px;
+        box-shadow: inset 1px 1px 0 rgba(255,255,255,0.14), inset -1px -1px 0 rgba(0,0,0,0.5);
+        padding: 7px 12px; cursor: pointer; font-family: inherit; font-size: 13px;
+      }
+      .btn:hover { filter: brightness(1.15); }
+      .btn:disabled { opacity: 0.45; cursor: default; }
+      .btn:disabled:hover { filter: none; }
+
+      #overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); z-index: 30; }
+      .panel { background: #1a222b; border: 1px solid #39444f; border-radius: 6px; padding: 24px; max-width: 480px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.7); }
+      .panel h1 { font-size: 1.3rem; letter-spacing: 0.15em; margin: 0 0 16px; color: #ffd75e; }
       .panel .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
       .hidden { display: none !important; }
       .win { color: #4ade80; } .lose { color: #f87171; }
       .panel.wide { max-width: 760px; text-align: left; overflow-y: auto; max-height: 86vh; }
-      .panel.wide h2 { font-size: 1rem; margin: 16px 0 6px; color: #c8920e; }
-      .muted { color: #8f99a3; font-size: 12px; }
+      .panel.wide h2 { font-size: 1rem; margin: 16px 0 6px; color: #ffd75e; }
+      .muted { color: #8fa3b5; font-size: 12px; }
       #dash-champion .champ { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
       .spark { background: #0a0e13; border: 1px solid #232b34; border-radius: 4px; margin-top: 4px; }
       table { border-collapse: collapse; width: 100%; font-size: 13px; }
       th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid #1b232c; }
       #dash-status { color: #f87171; min-height: 1.2em; }
-      #spectate-bar { bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; }
-      #spectate-bar input[type="range"] { width: 200px; accent-color: #c8920e; }
       #spectate-list-body { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
       .spectate-row { text-align: left; }
     </style>
@@ -45,17 +152,48 @@
   <body>
     <canvas id="view"></canvas>
 
-    <div id="topbar" class="hud">
+    <!-- Top command bar -->
+    <div id="topbar" class="steel hidden">
       <span class="title">CRUCIBLE</span>
-      <span id="opponent"></span>
-      <span>ore <span id="ore">0</span></span>
-      <span id="clock">0:00</span>
+      <span class="opp" id="opponent"></span>
+      <span class="spacer"></span>
+      <span class="res"><span class="k">Ore</span> <span id="ore">0</span> <span id="income"></span></span>
+      <span class="res"><span class="k">Workers</span> <span id="workers">0</span></span>
+      <span class="res"><span class="k">Time</span> <span id="clock">0:00</span></span>
     </div>
 
-    <div id="selection" class="hud hidden"></div>
-    <div id="build-panel" class="hud hidden"></div>
-    <div id="log" class="hud hidden"></div>
-    <div id="spectate-bar" class="hud hidden">
+    <!-- Right command sidebar: selection card, build menu, radar -->
+    <div id="sidebar" class="steel hidden">
+      <div id="sel-card" class="steel">
+        <div class="steel-title">Command</div>
+        <div class="body">
+          <div id="sel-name">—</div>
+          <div id="sel-detail"></div>
+          <div class="hpwrap hidden" id="sel-hpwrap"><div id="sel-hp"></div></div>
+          <div class="queue hidden" id="sel-queue"></div>
+        </div>
+      </div>
+
+      <div id="cmd-menu" class="steel">
+        <div class="steel-title">Build</div>
+        <div id="cmd-empty">Select a building to train units, or nothing to place new buildings.</div>
+        <div class="grid" id="cmd-grid"></div>
+      </div>
+
+      <div id="radar-block" class="steel">
+        <div class="steel-title">Radar</div>
+        <div id="radar-wrap"><canvas id="radar"></canvas></div>
+      </div>
+    </div>
+
+    <div id="log" class="steel hidden">
+      <div class="steel-title">Events</div>
+      <div class="body" id="log-body"></div>
+    </div>
+
+    <div id="tooltip"></div>
+
+    <div id="spectate-bar" class="steel hidden">
       <button class="btn" id="sp-play">▶</button>
       <button class="btn" id="sp-speed">1×</button>
       <input type="range" id="sp-scrub" min="0" max="1" value="0" />

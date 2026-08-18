@@ -3,7 +3,7 @@
 //! contract.
 
 use crate::entity::{unit_stats, Player, Stance, Unit, UnitOrder, UnitType, Upgrade};
-use crate::fixed::Pos;
+use crate::fixed::{isqrt, Pos, FIX_SCALE};
 use crate::game::Game;
 
 const SPAWN_NEIGHBORS: [(i8, i8); 8] = [
@@ -43,9 +43,51 @@ impl Game {
         self.production_phase();
         self.combat_phase();
         self.turret_phase();
+        self.separation_phase();
         self.sweep_dead();
         self.fog_phase();
         self.check_win();
+    }
+
+    /// Push overlapping units apart so they don't stack on one spot.
+    ///
+    /// Deterministic: pairs are considered in ascending id order and only the
+    /// later id moves, so the result does not depend on iteration order. The
+    /// pushed position is only applied when its tile is passable and not
+    /// occupied by a building.
+    fn separation_phase(&mut self) {
+        const MIN_SEP: i64 = FIX_SCALE as i64 / 2; // 0.5 tile
+        const MIN_SEP2: i64 = MIN_SEP * MIN_SEP;
+        let blocked = self.blocked_grid();
+        let n = self.units.len();
+        for i in 0..n {
+            let a = self.units[i].pos;
+            for j in (i + 1)..n {
+                let b = self.units[j].pos;
+                let dx = b.x as i64 - a.x as i64;
+                let dy = b.y as i64 - a.y as i64;
+                let d2 = dx * dx + dy * dy;
+                if d2 >= MIN_SEP2 {
+                    continue;
+                }
+                let (nx, ny) = if d2 == 0 {
+                    // Exact stack: fall back to +x.
+                    (b.x + MIN_SEP as i32, b.y)
+                } else {
+                    let d = isqrt(d2);
+                    let push = ((MIN_SEP - d) / 2).max(1);
+                    (b.x + (dx * push / d) as i32, b.y + (dy * push / d) as i32)
+                };
+                let (tx, ty) = (crate::fixed::fix_to_tile(nx), crate::fixed::fix_to_tile(ny));
+                if tx < 64
+                    && ty < 64
+                    && self.map.is_passable(tx, ty)
+                    && !blocked[crate::map::tile_index(tx, ty)]
+                {
+                    self.units[j].pos = Pos::new(nx, ny);
+                }
+            }
+        }
     }
 
     /// Advance production queues and spawn completed units.
@@ -81,7 +123,7 @@ impl Game {
         }
     }
 
-    fn pick_spawn_tile(&self, building: (u8, u8)) -> Option<(u8, u8)> {
+    pub(crate) fn pick_spawn_tile(&self, building: (u8, u8)) -> Option<(u8, u8)> {
         for (dx, dy) in SPAWN_NEIGHBORS {
             let x = building.0 as i32 + dx as i32;
             let y = building.1 as i32 + dy as i32;
@@ -96,7 +138,7 @@ impl Game {
         None
     }
 
-    fn spawn_unit(
+    pub(crate) fn spawn_unit(
         &mut self,
         owner: Player,
         utype: UnitType,
@@ -123,7 +165,7 @@ impl Game {
         };
         let path = if let UnitOrder::Move { waypoint, .. } = order {
             self.map
-                .find_path((tile.0, tile.1), waypoint.tile())
+                .find_path((tile.0, tile.1), waypoint.tile(), &self.blocked_grid())
                 .unwrap_or_default()
         } else {
             Vec::new()

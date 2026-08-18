@@ -31,8 +31,9 @@ impl Game {
             .filter(|u| u.is_alive() && unit_stats(u.utype).damage > 0)
             .map(|u| u.id)
             .collect();
+        let blocked = self.blocked_grid();
         for uid in ids {
-            self.combat_unit_tick(uid);
+            self.combat_unit_tick(uid, &blocked);
         }
     }
 
@@ -75,7 +76,7 @@ impl Game {
         out
     }
 
-    fn combat_unit_tick(&mut self, uid: EntityId) {
+    fn combat_unit_tick(&mut self, uid: EntityId, blocked: &[bool]) {
         let Some(idx) = self.units.iter().position(|u| u.id == uid) else {
             return;
         };
@@ -117,7 +118,7 @@ impl Game {
 
         let new_fleeing = if should_flee {
             let dest = self.flee_dest(owner, pos);
-            new_pos = self.move_along_path(&mut path, pos, dest, stats.speed);
+            new_pos = self.move_along_path(blocked, &mut path, pos, dest, stats.speed);
             true
         } else {
             if new_target.is_none() {
@@ -153,10 +154,10 @@ impl Game {
 
                     if stats.min_range > 0 && d2 < min_range2 {
                         if can_chase {
-                            new_pos = step_away(&self.map, pos, tpos, stats.speed);
+                            new_pos = step_away(&self.map, blocked, pos, tpos, stats.speed);
                         }
                     } else if !in_fire_range && can_chase {
-                        new_pos = step_direct(&self.map, pos, tpos, stats.speed);
+                        new_pos = step_direct(&self.map, blocked, pos, tpos, stats.speed);
                     }
 
                     if in_fire_range && new_cooldown <= 0 {
@@ -176,7 +177,7 @@ impl Game {
                     }
                 }
             } else if let UnitOrder::Move { waypoint, .. } = order {
-                new_pos = self.move_along_path(&mut path, pos, waypoint, stats.speed);
+                new_pos = self.move_along_path(blocked, &mut path, pos, waypoint, stats.speed);
             }
             false
         };
@@ -251,21 +252,22 @@ impl Game {
 
     fn move_along_path(
         &mut self,
+        blocked: &[bool],
         path: &mut Vec<(u8, u8)>,
         pos: Pos,
         dest: Pos,
         speed: i32,
     ) -> Pos {
         if path.is_empty() {
-            if let Some(p) = self.map.find_path(pos.tile(), dest.tile()) {
+            if let Some(p) = self.map.find_path(pos.tile(), dest.tile(), blocked) {
                 *path = p;
             }
         }
         let Some(next) = path.first().copied() else {
-            return step_direct(&self.map, pos, dest, speed);
+            return step_direct(&self.map, blocked, pos, dest, speed);
         };
         let ndest = Pos::from_tile(next.0, next.1);
-        let (p, arrived) = step_towards(&self.map, pos, ndest, speed);
+        let (p, arrived) = step_towards(&self.map, blocked, pos, ndest, speed);
         if arrived || p.tile() == next {
             path.remove(0);
         }
@@ -280,16 +282,16 @@ fn apply_damage_upgrade(damage: i32, upgrade: Upgrade) -> i32 {
     }
 }
 
-fn step_direct(map: &crate::map::Map, pos: Pos, dest: Pos, speed: i32) -> Pos {
-    step_towards(map, pos, dest, speed).0
+fn step_direct(map: &crate::map::Map, blocked: &[bool], pos: Pos, dest: Pos, speed: i32) -> Pos {
+    step_towards(map, blocked, pos, dest, speed).0
 }
 
-fn step_away(map: &crate::map::Map, pos: Pos, from: Pos, speed: i32) -> Pos {
+fn step_away(map: &crate::map::Map, blocked: &[bool], pos: Pos, from: Pos, speed: i32) -> Pos {
     let dx = pos.x as i64 - from.x as i64;
     let dy = pos.y as i64 - from.y as i64;
     if dx == 0 && dy == 0 {
         return pos;
     }
     let dest = Pos::new(pos.x + dx as i32, pos.y + dy as i32);
-    step_towards(map, pos, dest, speed).0
+    step_towards(map, blocked, pos, dest, speed).0
 }

@@ -83,9 +83,9 @@ class Spectate {
     hide("lobby");
     hide("result");
     hide("dashboard");
-    hide("build-panel");
-    hide("selection");
+    hide("sidebar");
     hide("log");
+    hide("spectate-bar");
     show("overlay");
     show("spectate-list");
     this.active = false;
@@ -118,9 +118,13 @@ class Spectate {
 
       // Camera on player 0's HQ, like a live match start.
       const hq = this.meta.hq_tiles[0];
-      this.renderer.camera.cx = hq[0] + 0.5;
-      this.renderer.camera.cy = hq[1] + 0.5;
-      this.renderer.camera.zoom = 18;
+      this.renderer.camera.focusOn(
+        hq[0] + 0.5,
+        hq[1] + 0.5,
+        18,
+        window.innerWidth,
+        window.innerHeight,
+      );
 
       hide("overlay");
       hide("spectate-list");

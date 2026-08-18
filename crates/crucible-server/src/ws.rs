@@ -79,6 +79,15 @@ struct DiffEntity {
     max_hp: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     stale: Option<i32>,
+    /// Own-building production queue (unit kind names, oldest first).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue: Option<Vec<String>>,
+    /// Progress of the current queue head, in ticks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress: Option<i32>,
+    /// Build time of the current queue head, in ticks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_time: Option<i32>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -251,11 +260,24 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
                 hp: u.hp,
                 max_hp: u.max_hp,
                 stale: None,
+                queue: None,
+                progress: None,
+                build_time: None,
             });
         }
     }
     for b in &game.buildings {
         if b.owner == Player::P0 {
+            let (queue, progress, build_time) = if !b.queue.is_empty() {
+                let head = b.queue[0];
+                (
+                    Some(b.queue.iter().map(|u| format!("{u:?}")).collect::<Vec<_>>()),
+                    Some(b.progress),
+                    Some(crucible_sim::unit_stats(head).build_time),
+                )
+            } else {
+                (None, None, None)
+            };
             entities.push(DiffEntity {
                 id: b.id,
                 kind: building_kind(b.btype),
@@ -265,6 +287,9 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
                 hp: b.hp,
                 max_hp: b.max_hp,
                 stale: None,
+                queue,
+                progress,
+                build_time,
             });
         }
     }
@@ -279,6 +304,9 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
             hp: 0,
             max_hp: 0,
             stale: Some(m.last_seen),
+            queue: None,
+            progress: None,
+            build_time: None,
         });
     }
     for m in &view.buildings {
@@ -291,6 +319,9 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
             hp: 0,
             max_hp: 0,
             stale: Some(m.last_seen),
+            queue: None,
+            progress: None,
+            build_time: None,
         });
     }
 

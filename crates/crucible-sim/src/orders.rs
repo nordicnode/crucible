@@ -7,7 +7,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::entity::{
-    building_produces, BuildingType, EntityId, Player, Stance, UnitType, Upgrade, BUILD_RADIUS,
+    building_produces, BuildingType, EntityId, Player, Stance, UnitType, Upgrade,
+    PLACE_RADIUS_TILES,
 };
 use crate::game::Game;
 use crate::map::tile_index;
@@ -199,7 +200,7 @@ impl Game {
         if self.ore[player.index()] < cost {
             return Err(NotEnoughOre);
         }
-        if !self.within_build_radius(player, tile) {
+        if !self.near_own_building(player, tile) {
             return Err(TooFarFromBase);
         }
         Ok(())
@@ -262,23 +263,22 @@ impl Game {
         Ok(())
     }
 
-    fn within_build_radius(&self, player: Player, tile: (u8, u8)) -> bool {
+    /// The target tile must be within [`PLACE_RADIUS_TILES`] of at least one own
+    /// building (any building, including ones still under construction). This is
+    /// what keeps a base in one connected clump instead of scattered structures.
+    fn near_own_building(&self, player: Player, tile: (u8, u8)) -> bool {
         let cx = crate::fixed::tile_center(tile.0);
         let cy = crate::fixed::tile_center(tile.1);
-        for b in &self.buildings {
-            if b.owner == player
-                && (b.btype == BuildingType::Hq || b.btype == BuildingType::Refinery)
-            {
+        let lim = (PLACE_RADIUS_TILES as i64 * crate::fixed::FIX_SCALE as i64)
+            * (PLACE_RADIUS_TILES as i64 * crate::fixed::FIX_SCALE as i64);
+        self.buildings
+            .iter()
+            .filter(|b| b.owner == player)
+            .any(|b| {
                 let px = crate::fixed::tile_center(b.tile.0);
                 let py = crate::fixed::tile_center(b.tile.1);
-                if crate::fixed::dist2(cx, cy, px, py)
-                    <= (BUILD_RADIUS as i64) * (BUILD_RADIUS as i64)
-                {
-                    return true;
-                }
-            }
-        }
-        false
+                crate::fixed::dist2(cx, cy, px, py) <= lim
+            })
     }
 
     fn count_buildings(&self, player: Player, btype: BuildingType) -> usize {

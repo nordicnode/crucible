@@ -51,8 +51,15 @@ champion, start the trainer too (see *Training the AI* below).
 - Select a building to train units, research upgrades (Tech Lab), or sell it.
   With nothing selected, the build panel offers Refinery, Barracks, Factory,
   Tech Lab, and Turret.
+- Buildings must be placed within a few tiles of an existing one, so your base
+  grows as a connected clump (the placement ghost turns green when the spot is
+  valid, red when it isn't).
 - You see only your own fog-of-war view and are capped at a human-plausible
   120 actions per minute.
+
+You start with a Harvester; it mines the gold crystals and banks ore at a
+Refinery (watch the `workers` counter and the `+N/s` income readout in the
+top bar — income comes from deposits plus a small refinery trickle).
 
 Destroy the enemy HQ to win. If the clock runs out, the side with more
 remaining value wins.

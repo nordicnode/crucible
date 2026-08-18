@@ -98,13 +98,16 @@ parallelism (rayon), and match execution.
   counter matrix and bot tiers over a fixed **32-seed** set (3.125% rate
   resolution); the CI test `balance_table_matches_baseline` fails if any
   sim/unit change moves a rate.
-- Target band: no unit may win its counter matchup outside **35–65%** at equal
-  cost, and each counter must still win a majority. The v1 tune satisfies this
-  for all three counters (tank>infantry 62%, artillery>tank 59%,
-  infantry>artillery 56%).
+- Target band: no unit may win its counter matchup outside **50–85%** at equal
+  cost, and each counter must still win a majority. The band used to be 35–65%
+  "soft counters", but that was measured against the pre-movement-fix sim
+  where every unit stacked on one tile (the counters were an artifact of that
+  bug). Under positional combat (formation spread, separation, building
+  collision) the counters are stronger but still non-trivial; the committed
+  v1 tune gives tank>infantry 81%, artillery>tank 72%, infantry>artillery 72%.
 - Match-length p50 targets 5–10 min. `match_length_p50_within_band` asserts
-  both bot tiers land in the band (rush-vs-turtle ~5.8 min,
-  hard-vs-medium ~9.3 min); the turtle's finite, never-rebuilt turrets are
+  both bot tiers land in the band (rush-vs-turtle ~5.0 min,
+  hard-vs-medium ~8.3 min); the turtle's finite, never-rebuilt turrets are
   what let sustained waves break through instead of stalemating.
 
 ## 7. Guarantees to dependents

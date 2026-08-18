@@ -28,6 +28,10 @@ M9 (champion & museum playable in the live lobby) implemented.**
   `JoinMatch { opponent }` then `Commands { cmds[] }`; server sends
   `MatchStart`, per-tick fogged `StateDiff`, and `MatchEnd { result, replay_id }`.
   Invalid commands are rejected with a reason.
+- `StateDiff` entities for the human player's buildings carry `queue` (unit
+  kind names, oldest first), `progress` (ticks into the current item), and
+  `buildTime` (ticks for the current item) so the client can render the build
+  queue. Enemy/unit entities omit these fields.
 - Command wire format is pinned by serde derives: `player` is the variant
   name `"P0"`/`"P1"` (NOT an index), `btype`/`utype` are variant names.
   The client pins this contract in `client/src/types.test.ts`, and the

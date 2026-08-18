@@ -49,6 +49,12 @@ export interface DiffEntity {
   hp: number;
   maxHp: number;
   stale?: number;
+  /** Own-building production queue (unit kind names, oldest first). */
+  queue?: string[];
+  /** Progress of the current queue head, in ticks. */
+  progress?: number;
+  /** Build time of the current queue head, in ticks. */
+  buildTime?: number;
 }
 
 export interface OreTile {

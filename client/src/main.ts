@@ -3,7 +3,7 @@
 
 import { initDashboard } from "./dashboard";
 import { Net } from "./net";
-import { Renderer } from "./renderer";
+import { drawRadar, Renderer } from "./renderer";
 import { spectate } from "./spectate";
 import { World } from "./world";
 import {
@@ -32,6 +32,7 @@ const renderer = new Renderer();
 
 let selection = new Set<number>();
 let placementMode: BuildingType | null = null;
+let placementCursor: [number, number] | null = null;
 let opponentLabel = "hard";
 
 // Input drag state.
@@ -53,14 +54,12 @@ function onServerMsg(msg: ServerMsg): void {
     case "matchStart": {
       world.setMap(msg.mapSeed, msg.passable, msg.hq);
       const ownHq = msg.hq[msg.player];
-      renderer.camera.cx = ownHq[0] + 0.5;
-      renderer.camera.cy = ownHq[1] + 0.5;
-      renderer.camera.zoom = 18;
+      renderer.camera.focusOn(ownHq[0] + 0.5, ownHq[1] + 0.5, 18, canvas.width, canvas.height);
       el("overlay").classList.add("hidden");
-      el("build-panel").classList.remove("hidden");
-      el("selection").classList.remove("hidden");
+      el("sidebar").classList.remove("hidden");
+      el("topbar").classList.remove("hidden");
       el("log").classList.remove("hidden");
-      el("opponent").textContent = `vs ${opponentLabel}`;
+      el("opponent").textContent = opponentLabel;
       break;
     }
     case "stateDiff": {
@@ -95,8 +94,8 @@ function showLobby(): void {
   el("overlay").classList.remove("hidden");
   el("lobby").classList.remove("hidden");
   el("result").classList.add("hidden");
-  el("build-panel").classList.add("hidden");
-  el("selection").classList.add("hidden");
+  el("sidebar").classList.add("hidden");
+  el("topbar").classList.add("hidden");
   el("log").classList.add("hidden");
 }
 
@@ -160,6 +159,7 @@ canvas.addEventListener("mousedown", (ev) => {
     if (placementMode) {
       sendCommands([placeBuilding(placementMode, tileAt(sx, sy))]);
       placementMode = null;
+      placementCursor = null;
     } else {
       dragStart = [sx, sy];
       dragCurrent = [sx, sy];
@@ -182,6 +182,9 @@ canvas.addEventListener("mousemove", (ev) => {
     lastPan = [sx, sy];
   } else if (dragStart) {
     dragCurrent = [sx, sy];
+  }
+  if (!spectate.active && placementMode && !panning && !dragStart) {
+    placementCursor = tileAt(sx, sy);
   }
 });
 
@@ -242,52 +245,50 @@ canvas.addEventListener("wheel", (ev) => {
 canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
 window.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") placementMode = null;
+  if (ev.key === "Escape") {
+    placementMode = null;
+    placementCursor = null;
+  }
 });
 
 // ---------------------------------------------------------------------------
-// HUD
+// HUD — C&C-style command sidebar
 // ---------------------------------------------------------------------------
 
 let lastPanelSig = "";
 
-function renderBuildPanelIfChanged(): void {
-  const sig = [...selection].sort((a, b) => a - b).join(",") + "|" + placementMode;
-  if (sig === lastPanelSig) return;
-  lastPanelSig = sig;
-  const panel = el("build-panel");
-  panel.innerHTML = "";
-  const single = selectedSingle();
-  const selEntity = single != null ? world.entities.get(single) : null;
+/// Icon + label for build/unit buttons.
+const BUTTON_META: Record<string, { ic: string; label: string }> = {
+  Refinery: { ic: "⛏", label: "Refinery" },
+  Barracks: { ic: "🪖", label: "Barracks" },
+  Factory: { ic: "🏭", label: "Factory" },
+  TechLab: { ic: "🔬", label: "Tech Lab" },
+  Turret: { ic: "🛡", label: "Turret" },
+  Harvester: { ic: "⛏", label: "Harvester" },
+  Infantry: { ic: "🪖", label: "Infantry" },
+  Tank: { ic: "🚜", label: "Tank" },
+  Artillery: { ic: "💥", label: "Artillery" },
+};
 
-  if (selEntity && BUILDING_KINDS.has(selEntity.kind)) {
-    for (const u of producibleUnits(selEntity.kind)) {
-      panel.appendChild(costButton(u, UNIT_COSTS[u], () => sendCommands([trainUnit(single!, u)])));
-    }
-    if (selEntity.kind === "TechLab") {
-      panel.appendChild(costButton("⚡ Damage", 0, () => sendCommands([chooseUpgrade(single!, "Damage")])));
-      panel.appendChild(costButton("❤ HP", 0, () => sendCommands([chooseUpgrade(single!, "Hp")])));
-    }
-    if (selEntity.kind !== "Hq") {
-      panel.appendChild(costButton("Sell", 0, () => sendCommands([sell(single!)])));
-    }
-  } else {
-    const buildings: BuildingType[] = ["Refinery", "Barracks", "Factory", "TechLab", "Turret"];
-    for (const b of buildings) {
-      const btn = costButton(b, BUILD_COSTS[b], () => {
-        placementMode = placementMode === b ? null : b;
-      });
-      if (placementMode === b) btn.classList.add("armed");
-      panel.appendChild(btn);
-    }
-  }
-}
-
-function costButton(label: string, cost: number, onClick: () => void): HTMLButtonElement {
+function cmdButton(
+  key: string,
+  cost: number,
+  onClick: () => void,
+  opts: { armed?: boolean } = {},
+): HTMLButtonElement {
+  const meta = BUTTON_META[key] ?? { ic: "▣", label: key };
   const b = document.createElement("button");
-  b.className = "btn";
-  b.textContent = cost > 0 ? `${label} ${cost}` : label;
-  b.addEventListener("click", onClick);
+  b.className = "cmd";
+  b.innerHTML = `<span class="ic">${meta.ic}</span>${meta.label}`;
+  if (cost > 0) {
+    const c = document.createElement("span");
+    c.className = "cost";
+    c.textContent = String(cost);
+    b.appendChild(c);
+    if (world.ore < cost) b.classList.add("disabled");
+  }
+  if (opts.armed) b.classList.add("armed");
+  if (!b.classList.contains("disabled")) b.addEventListener("click", onClick);
   return b;
 }
 
@@ -300,26 +301,97 @@ function producibleUnits(kind: string): UnitType[] {
   return [];
 }
 
-function renderSelectionPanel(): void {
-  const panel = el("selection");
-  if (selection.size === 0) {
-    panel.classList.add("hidden");
-    return;
+function renderCommandSidebar(): void {
+  const single = selectedSingle();
+  const selEntity = single != null ? world.entities.get(single) : null;
+  const qsig = selEntity && selEntity.queue ? `${selEntity.progress}/${selEntity.buildTime}` : "";
+  const sig =
+    [...selection].sort((a, b) => a - b).join(",") + "|" + placementMode + "|" + qsig + "|" + world.ore;
+  if (sig === lastPanelSig) return;
+  lastPanelSig = sig;
+
+  // Selection card.
+  const name = el("sel-name");
+  const detail = el("sel-detail");
+  const hpwrap = el("sel-hpwrap");
+  const hp = el("sel-hp");
+  const queue = el("sel-queue");
+
+  if (selEntity) {
+    name.textContent = selEntity.kind;
+    const hpText = selEntity.maxHp > 0 ? `${selEntity.hp}/${selEntity.maxHp}` : "";
+    detail.textContent = hpText + (selectedUnits().length > 1 ? ` · ${selection.size} selected` : "");
+    if (selEntity.maxHp > 0) {
+      hpwrap.classList.remove("hidden");
+      hp.style.width = `${Math.max(0, Math.min(100, (selEntity.hp / selEntity.maxHp) * 100))}%`;
+    } else {
+      hpwrap.classList.add("hidden");
+    }
+    if (selEntity.queue && selEntity.queue.length > 0) {
+      queue.classList.remove("hidden");
+      queue.innerHTML =
+        `Queue: ${selEntity.queue.join(" → ")}` +
+        `<div class="queue-bar"><div style="width:${Math.round(
+          (selEntity.buildTime ? selEntity.progress! / selEntity.buildTime : 0) * 100,
+        )}%"></div></div>`;
+    } else {
+      queue.classList.add("hidden");
+    }
+  } else if (selection.size > 0) {
+    const kinds = new Map<string, number>();
+    for (const id of selection) {
+      const e = world.entities.get(id);
+      if (e) kinds.set(e.kind, (kinds.get(e.kind) ?? 0) + 1);
+    }
+    name.textContent = [...kinds.entries()].map(([k, n]) => `${n}× ${k}`).join(", ");
+    detail.textContent = "Right-click to attack-move";
+    hpwrap.classList.add("hidden");
+    queue.classList.add("hidden");
+  } else {
+    name.textContent = "—";
+    detail.textContent = "Select a unit or building.";
+    hpwrap.classList.add("hidden");
+    queue.classList.add("hidden");
   }
-  panel.classList.remove("hidden");
-  const units = selectedUnits().length;
-  const kinds = new Map<string, number>();
-  for (const id of selection) {
-    const e = world.entities.get(id);
-    if (e) kinds.set(e.kind, (kinds.get(e.kind) ?? 0) + 1);
+
+  // Command menu (build vs train).
+  const grid = el("cmd-grid");
+  const empty = el("cmd-empty");
+  grid.innerHTML = "";
+  if (selEntity && BUILDING_KINDS.has(selEntity.kind)) {
+    empty.classList.add("hidden");
+    for (const u of producibleUnits(selEntity.kind)) {
+      grid.appendChild(cmdButton(u, UNIT_COSTS[u], () => sendCommands([trainUnit(single!, u)])));
+    }
+    if (selEntity.kind === "TechLab") {
+      const dmg = cmdButton("Damage", 0, () => sendCommands([chooseUpgrade(single!, "Damage")]));
+      (dmg.querySelector(".ic") as HTMLElement).textContent = "💥";
+      grid.appendChild(dmg);
+      const hpUp = cmdButton("Hp", 0, () => sendCommands([chooseUpgrade(single!, "Hp")]));
+      (hpUp.querySelector(".ic") as HTMLElement).textContent = "❤";
+      grid.appendChild(hpUp);
+    }
+    if (selEntity.kind !== "Hq") {
+      const sellBtn = cmdButton("Sell", 0, () => sendCommands([sell(single!)]));
+      (sellBtn.querySelector(".ic") as HTMLElement).textContent = "💲";
+      grid.appendChild(sellBtn);
+    }
+  } else {
+    empty.classList.remove("hidden");
+    const buildings: BuildingType[] = ["Refinery", "Barracks", "Factory", "TechLab", "Turret"];
+    for (const b of buildings) {
+      grid.appendChild(
+        cmdButton(b, BUILD_COSTS[b], () => {
+          placementMode = placementMode === b ? null : b;
+          placementCursor = null;
+        }, { armed: placementMode === b }),
+      );
+    }
   }
-  panel.textContent =
-    `${[...kinds.entries()].map(([k, n]) => `${n}× ${k}`).join(", ")}` +
-    (units > 0 ? ` · right-click to attack-move` : "");
 }
 
 function renderLog(): void {
-  const log = el("log");
+  const log = el("log-body");
   log.innerHTML = "";
   for (const ev of world.events.slice(-6)) {
     const d = document.createElement("div");
@@ -337,14 +409,22 @@ function formatClock(tick: number): string {
 // Loop
 // ---------------------------------------------------------------------------
 
+let radarSized = false;
+
 function resize(): void {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  radarSized = false;
 }
 window.addEventListener("resize", resize);
 resize();
 
-function frame(): void {
+let lastFrame = performance.now();
+
+function frame(ts: number): void {
+  const dt = Math.min(100, Math.max(1, ts - lastFrame));
+  lastFrame = ts;
+
   ctx.fillStyle = "#04060a";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -357,7 +437,9 @@ function frame(): void {
     return;
   }
 
+  world.advance(dt);
   renderer.draw(ctx, world, selection, canvas.width, canvas.height);
+  drawPlacementGhost();
 
   if (dragStart && dragCurrent) {
     ctx.strokeStyle = "#ffe27a";
@@ -368,12 +450,123 @@ function frame(): void {
   }
 
   el("ore").textContent = String(world.ore);
+  const refineries = world.ownBuildings.filter((b) => b.kind === "Refinery").length;
+  el("income").textContent = refineries > 0 ? `+${refineries * 10}/s` : "";
+  el("workers").textContent = String(world.ownUnits.filter((u) => u.kind === "Harvester").length);
   el("clock").textContent = formatClock(world.tick);
-  renderSelectionPanel();
-  renderBuildPanelIfChanged();
+  renderCommandSidebar();
   renderLog();
+  drawRadarFrame();
   requestAnimationFrame(frame);
 }
+
+// ---------------------------------------------------------------------------
+// Radar (C&C-style sidebar minimap)
+// ---------------------------------------------------------------------------
+
+function sizeRadar(): void {
+  const r = el<HTMLCanvasElement>("radar");
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.clientWidth * dpr));
+  const h = Math.max(1, Math.round(r.clientHeight * dpr));
+  if (r.width !== w || r.height !== h) {
+    r.width = w;
+    r.height = h;
+    radarSized = true;
+  }
+}
+
+function drawRadarFrame(): void {
+  if (el("sidebar").classList.contains("hidden") || spectate.active) return;
+  sizeRadar();
+  if (!radarSized) return;
+  const r = el<HTMLCanvasElement>("radar");
+  const rctx = r.getContext("2d");
+  if (!rctx) return;
+  drawRadar(rctx, world, renderer.camera, selection, canvas.width, canvas.height);
+}
+
+// ---------------------------------------------------------------------------
+// Placement preview
+// ---------------------------------------------------------------------------
+
+/// Mirror of the sim's `PLACE_RADIUS_TILES` (crates/crucible-sim/src/entity.rs):
+/// a build site must be within 5 tiles of the nearest own building.
+const PLACE_RADIUS = 5;
+
+function canPlaceHere(tile: [number, number]): boolean {
+  const [tx, ty] = tile;
+  if (tx < 0 || ty < 0 || tx >= 64 || ty >= 64) return false;
+  if (!world.passable[ty * 64 + tx]) return false;
+  const ore = world.oreTiles.get(`${tx},${ty}`);
+  if (ore && ore.amount > 0) return false;
+  const blocked = [...world.entities.values()].some(
+    (e) => e.owner === 0 && Math.floor(e.x) === tx && Math.floor(e.y) === ty,
+  );
+  if (blocked) return false;
+  if (!placementMode) return false;
+  const cost = BUILD_COSTS[placementMode] ?? 0;
+  if (world.ore < cost) return false;
+  return world.ownBuildings.some(
+    (b) => (b.x - (tx + 0.5)) ** 2 + (b.y - (ty + 0.5)) ** 2 <= PLACE_RADIUS * PLACE_RADIUS,
+  );
+}
+
+function drawPlacementGhost(): void {
+  if (!placementMode || !placementCursor) return;
+  const ok = canPlaceHere(placementCursor);
+  const px = renderer.camera.screenX(placementCursor[0]);
+  const py = renderer.camera.screenY(placementCursor[1]);
+  const z = renderer.camera.zoom;
+  if (px > canvas.width || py > canvas.height || px + z < 0 || py + z < 0) return;
+  ctx.fillStyle = ok ? "rgba(74, 222, 128, 0.32)" : "rgba(248, 113, 113, 0.32)";
+  ctx.fillRect(px, py, z, z);
+  ctx.strokeStyle = ok ? "#4ade80" : "#f87171";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(px + 0.75, py + 0.75, z - 1.5, z - 1.5);
+  // A thin gold ring when the cursor is valid: signals "click to place".
+  if (ok) {
+    ctx.strokeStyle = "rgba(255, 215, 94, 0.9)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px - 1.5, py - 1.5, z + 3, z + 3);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hover tooltip (ore fields + buildings)
+// ---------------------------------------------------------------------------
+
+let tooltipVisible = false;
+
+function updateTooltip(sx: number, sy: number): void {
+  const tip = el("tooltip");
+  const [tx, ty] = tileAt(sx, sy);
+  const ore = world.oreTiles.get(`${tx},${ty}`);
+  const ent = [...world.entities.values()].find(
+    (e) => Math.floor(e.x) === tx && Math.floor(e.y) === ty,
+  );
+  let text = "";
+  if (ent && ent.owner === 0) {
+    text = `${ent.kind}` + (ent.maxHp > 0 ? ` · ${ent.hp}/${ent.maxHp} HP` : "");
+  } else if (ore && ore.amount > 0) {
+    text = `Ore field · ${ore.amount} remaining`;
+  }
+  if (text) {
+    tip.textContent = text;
+    tip.style.display = "block";
+    tip.style.left = `${Math.min(sx + 14, window.innerWidth - 160)}px`;
+    tip.style.top = `${sy + 14}px`;
+    tooltipVisible = true;
+  } else if (tooltipVisible) {
+    tip.style.display = "none";
+    tooltipVisible = false;
+  }
+}
+
+canvas.addEventListener("mousemove", (ev) => {
+  const [sx, sy] = canvasPos(ev);
+  if (!spectate.active && !panning) updateTooltip(sx, sy);
+});
 
 // ---------------------------------------------------------------------------
 // Opponent picker
