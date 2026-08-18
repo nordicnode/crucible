@@ -9,3 +9,4 @@ description = "Evolution strategy, lineage, ghosts, gauntlet, Elo. Pure training
 crucible-sim.workspace = true
 crucible-ai.workspace = true
 serde.workspace = true
+serde_json.workspace = true

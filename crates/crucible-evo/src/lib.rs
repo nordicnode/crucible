@@ -7,6 +7,7 @@
 //! M4 shipped the population + fitness; M5 adds the gauntlet, lineage, Elo,
 //! and behavioral change reports. Ghosts land in M7.
 
+pub mod balance;
 pub mod fitness;
 pub mod gauntlet;
 pub mod ghost;
@@ -15,6 +16,10 @@ pub mod lineage;
 pub mod population;
 pub mod report;
 
+pub use balance::{
+    balance_table, bot_tier, bot_tier_lengths, bot_tiers, composition_cost, counter_matrix, median,
+    micro_matchup, micro_matchup_rate, Composition, WinRate,
+};
 pub use fitness::{
     evaluate_economy, evaluate_vs, self_play_fitness, shaped_fitness, spent_value, Noop,
 };

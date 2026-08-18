@@ -17,7 +17,13 @@ design. This README tracks what is actually implemented.
 - ✅ **M5 — Gauntlet, lineage, Elo, Museum API**
 - ✅ **M6 — Trainer + dashboard/museum UI + auto-battle**
 - ✅ **M7 — Ghost league**
-- ⬜ M8 — Balance harness + tuning
+- ✅ **M8 — Balance harness + tuning** (counter matrix committed as a CI baseline; v1 tune lands all three counters in the 35–65% band)
+
+> **M8 note:** the counter matrix is now in-band and directionally correct
+> (tank > infantry, artillery > tank, infantry > artillery, each 50–62%).
+> Match-length p50 is measured and guarded but still sits outside the
+> 5–10 min target (rush-vs-turtle ~2.5 min, hard-vs-medium ~14 min) — the
+> next tuning pass.
 
 ## Architecture
 

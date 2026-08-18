@@ -1,0 +1,69 @@
+{
+  "bot_tiers": [
+    {
+      "matchup": "medium>easy",
+      "rate": {
+        "a_wins": 16,
+        "b_wins": 0,
+        "draws": 0,
+        "matches": 16
+      }
+    },
+    {
+      "matchup": "hard>medium",
+      "rate": {
+        "a_wins": 12,
+        "b_wins": 4,
+        "draws": 0,
+        "matches": 16
+      }
+    }
+  ],
+  "counters": [
+    {
+      "matchup": "tank>infantry",
+      "rate": {
+        "a_wins": 10,
+        "b_wins": 6,
+        "draws": 0,
+        "matches": 16
+      }
+    },
+    {
+      "matchup": "artillery>tank",
+      "rate": {
+        "a_wins": 10,
+        "b_wins": 6,
+        "draws": 0,
+        "matches": 16
+      }
+    },
+    {
+      "matchup": "infantry>artillery",
+      "rate": {
+        "a_wins": 9,
+        "b_wins": 7,
+        "draws": 0,
+        "matches": 16
+      }
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ]
+}

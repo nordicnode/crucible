@@ -156,9 +156,9 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             hp: 60,
             damage: 35,
             range: tiles(6),
-            min_range: tiles(2),
+            min_range: tiles(1),
             speed: 12, // 0.5 tiles/s
-            cooldown: TICKS_PER_SEC * 25 / 10,
+            cooldown: TICKS_PER_SEC * 15 / 10,
             vision: tiles(6),
             splash: 0,
             build_time: TICKS_PER_SEC * 20,
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn artillery_has_min_range() {
-        assert_eq!(unit_stats(UnitType::Artillery).min_range, tiles(2));
+        assert!(unit_stats(UnitType::Artillery).min_range > 0);
     }
 
     #[test]

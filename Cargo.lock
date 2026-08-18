@@ -172,6 +172,7 @@ dependencies = [
  "crucible-ai",
  "crucible-sim",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
