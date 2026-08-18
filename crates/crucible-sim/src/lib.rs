@@ -17,6 +17,9 @@ pub mod entity;
 pub mod fixed;
 pub mod fog;
 pub mod game;
+/// The shared determinism-golden scenario (test support).
+#[doc(hidden)]
+pub mod golden;
 pub mod map;
 pub mod movement;
 pub mod orders;

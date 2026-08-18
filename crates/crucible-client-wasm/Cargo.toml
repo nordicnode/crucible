@@ -13,3 +13,6 @@ crucible-sim.workspace = true
 wasm-bindgen = "0.2"
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

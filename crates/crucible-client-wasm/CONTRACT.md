@@ -1,8 +1,16 @@
 # CONTRACT — crucible-client-wasm
 
-The `wasm-bindgen` shim exposing `crucible-sim` to the browser. **Status: M6
-— replay execution (`replay_result`, `replay_snapshot_json`) implemented; a
-wasm-bindgen-test/node runner for cross-target golden parity is still pending.**
+The `wasm-bindgen` shim exposing `crucible-sim` to the browser. **Status:
+replay execution (`replay_result`, `replay_snapshot_json`) and the
+wasm-bindgen-test/node golden-parity runner are implemented.**
+
+Cross-target parity is proven in `tests/wasm_parity.rs`: the same
+`crucible_sim::golden` scenario that runs natively in
+`crucible-sim/tests/determinism.rs` runs here under wasm and must produce the
+identical hashes. CI runs it via `cargo test -p crucible-client-wasm
+--target wasm32-unknown-unknown` using `wasm-bindgen-test-runner` (installed
+by `taiki-e/install-action` with `wasm-bindgen@<version>` pinned to the
+`Cargo.lock` version).
 
 ## 1. Purpose & scope
 
@@ -19,8 +27,10 @@ passthrough over `crucible-sim`, not a second implementation.
   step ticks, and serialize snapshots, but must not modify or duplicate game
   logic. Any behavior difference from native `crucible-sim` is a bug.
 - **Same determinism.** Byte-identical to native: same seed + command log ⇒
-  same serialized state. Golden tests that run natively must also run under
-  wasm (wasm-bindgen-test/node) and produce identical hashes.
+  same serialized state. Golden tests run natively *and* under wasm
+  (wasm-bindgen-test/node, `tests/wasm_parity.rs`) against the single shared
+  set of constants in `crucible_sim::golden`, and must produce identical
+  hashes.
 
 ## 3. API surface
 

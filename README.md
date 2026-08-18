@@ -57,11 +57,15 @@ server-side.
   (map seed + ordered commands), not state dumps.
 
 Golden determinism tests hash the serialized state of a scripted match at fixed
-ticks and fail if any byte changes.
+ticks and fail if any byte changes. The *same* scenario runs on native
+(`crucible-sim/tests/determinism.rs`) and under wasm
+(`crucible-client-wasm/tests/wasm_parity.rs`) against one shared set of golden
+constants (`crucible_sim::golden`), so native/wasm parity is enforced rather
+than assumed.
 
 CI (`.github/workflows/ci.yml`) enforces `cargo fmt --check`, clippy
-(`-D warnings`), `cargo test --workspace`, the wasm32 build, and the client
-build + tests on every push and PR.
+(`-D warnings`), `cargo test --workspace`, the wasm32 build, the
+wasm golden-parity test, and the client build + tests on every push and PR.
 
 ## Building & testing
 
@@ -75,6 +79,11 @@ cargo clippy --workspace --all-targets
 rustup target add wasm32-unknown-unknown
 cargo build -p crucible-sim --target wasm32-unknown-unknown
 cargo build -p crucible-client-wasm --target wasm32-unknown-unknown
+
+# Cross-target golden parity (native == wasm, run under node)
+# The runner ships with wasm-bindgen-cli; pin to the Cargo.lock wasm-bindgen version.
+cargo install wasm-bindgen-cli --version 0.2.127 --locked
+cargo test -p crucible-client-wasm --target wasm32-unknown-unknown
 
 # Client
 cd client && npm install && npm run build && npm test

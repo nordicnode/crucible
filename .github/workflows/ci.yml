@@ -18,6 +18,10 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.127
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
@@ -31,6 +35,9 @@ jobs:
 
       - name: Build wasm (sim + client shim)
         run: cargo build -p crucible-sim -p crucible-ai -p crucible-evo -p crucible-client-wasm --target wasm32-unknown-unknown
+
+      - name: Test wasm (native/wasm golden parity)
+        run: cargo test -p crucible-client-wasm --target wasm32-unknown-unknown
 
   client:
     name: Client — build + test
