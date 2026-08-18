@@ -104,7 +104,9 @@ and `http://127.0.0.1:8787/api/champion` (current champion + Elo).
 - **The commander, not the soldier.** The evolvable brain is a small neural
   network (~12k weights) that makes strategic decisions on a 2-second tick:
   build, train, expand, attack. Individual units run scripted micro. It plays
-  with the same fog of war and APM limit you do.
+  with the same fog of war and APM limit you do. Your own commands are applied
+  immediately (within one 100 ms tick), so the game stays responsive even
+  though the opponent deliberates slowly.
 - **Evolution strategy.** A population of genomes competes in headless
   self-play; the strongest are kept and mutated. No backpropagation; selection
   pressure does the learning.

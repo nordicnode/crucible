@@ -186,6 +186,20 @@ mod tests {
                 game.apply_commands(Player::P0, &[cmd]);
                 refineries += 1;
             }
+            // A *mid-tick* human command (tick 21 falls between command-tick
+            // boundaries, which are multiples of COMMAND_TICK = 20). The live
+            // server applies human commands on arrival, so replay_at_tick must
+            // reproduce it byte-for-byte.
+            if game.tick == 21 {
+                let hq = game.hq(Player::P0).unwrap().tile;
+                let cmd = Command::PlaceBuilding {
+                    player: Player::P0,
+                    btype: BuildingType::Refinery,
+                    tile: ((hq.0 as i32 + 2) as u8, (hq.1 as i32 + 2) as u8),
+                };
+                replay.record(game.tick, Player::P0, cmd.clone());
+                game.apply_commands(Player::P0, &[cmd]);
+            }
             game.step();
             if next < capture_ticks.len() && game.tick == capture_ticks[next] {
                 captures.push(snapshot_bytes(&game));

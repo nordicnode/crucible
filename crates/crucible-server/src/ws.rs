@@ -185,20 +185,25 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
             pending.extend(cmds);
         }
 
+        // The AI opponent (P1) deliberates on the command-tick cadence
+        // (COMMAND_TICK = 20 sim ticks, i.e. every 2 s).
         if game.is_command_tick() {
-            // Opponent (P1) acts first, then the human (P0) — both validated.
             let bot_cmds = bot.decide(&game, Player::P1);
             for c in &bot_cmds {
                 replay.record(game.tick, Player::P1, c.clone());
             }
             game.apply_commands(Player::P1, &bot_cmds);
-
-            let human_cmds = std::mem::take(&mut pending);
-            for c in &human_cmds {
-                replay.record(game.tick, Player::P0, c.clone());
-            }
-            game.apply_commands(Player::P0, &human_cmds);
         }
+
+        // Human (P0) commands apply the tick they arrive — no waiting for the
+        // next command-tick boundary. Replays record the exact tick, and the
+        // replay re-runs (spectate shim, ghosts) apply commands at arbitrary
+        // ticks, so this stays byte-deterministic.
+        let human_cmds = std::mem::take(&mut pending);
+        for c in &human_cmds {
+            replay.record(game.tick, Player::P0, c.clone());
+        }
+        game.apply_commands(Player::P0, &human_cmds);
 
         game.step();
 

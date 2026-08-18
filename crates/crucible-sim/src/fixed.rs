@@ -18,7 +18,9 @@ pub type Fix = i32;
 
 /// Sim ticks per second of game time. The fixed timestep.
 pub const TICKS_PER_SEC: i32 = 10;
-/// Command tick: the AI (and human batching) issues commands every 2s.
+/// Command tick: the AI bot cadence issues commands every 2s. Human commands
+/// are *not* gated on this — the server applies them on arrival (see
+/// crucible-server's ws loop).
 pub const COMMAND_TICK: i32 = 20;
 /// Match timeout in ticks (15 minutes of game time).
 pub const MATCH_TIMEOUT_TICKS: i32 = TICKS_PER_SEC * 60 * 15;

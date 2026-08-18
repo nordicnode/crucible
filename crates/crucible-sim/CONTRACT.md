@@ -22,8 +22,13 @@ and injected.
 ## 2. Determinism contract (this is the whole point)
 
 1. **Fixed timestep.** `Game::step()` advances exactly one tick = 100 ms.
-   `TICKS_PER_SEC = 10`. There is no variable-duration step. The command tick
-   is every 20 sim ticks (2 s): `COMMAND_TICK = 20`.
+   `TICKS_PER_SEC = 10`. There is no variable-duration step. The *bot
+   deliberation* cadence is every 20 sim ticks (2 s): `COMMAND_TICK = 20`.
+   Human commands are **not** gated on it: the server applies them the tick
+   they arrive and records that tick in the replay, and the replay consumers
+   (`serialize::replay_to_game`/`replay_at_tick`, the ghost runner) apply
+   commands at arbitrary ticks, so command latency is one 100 ms tick while
+   bot cadence stays a deliberate 2 s.
 2. **One PRNG.** All randomness flows through `rng::Rng`, a self-contained
    xoshiro256\*\* seeded from a `u64`. No unseeded entropy exists in the sim.
    A pinned known-sequence test guards the exact stream.
