@@ -152,8 +152,15 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
     tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             if let Message::Text(t) = msg {
-                if let Ok(ClientMsg::Commands { cmds }) = serde_json::from_str(&t) {
-                    let _ = tx.send(cmds);
+                match serde_json::from_str::<ClientMsg>(&t) {
+                    Ok(ClientMsg::Commands { cmds }) => {
+                        let _ = tx.send(cmds);
+                    }
+                    Ok(ClientMsg::JoinMatch { .. }) => {}
+                    // Never drop a malformed command silently: a wire-format
+                    // drift (e.g. player as index vs "P0") otherwise looks
+                    // like the game ignoring the player.
+                    Err(e) => tracing::warn!("dropping unparseable client message: {e}: {t}"),
                 }
             }
         }

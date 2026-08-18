@@ -1,0 +1,30 @@
+import { describe, expect, it } from "vitest";
+import { placeBuilding, trainUnit, type Command } from "./types";
+
+// The server deserializes commands with serde: `Player` is a fieldless enum,
+// so `player` must be the variant name string ("P0"), NOT an index (0).
+// These JSON shapes are pinned by `crucible-sim/examples/wire_probe.rs`; if
+// either side drifts, live-match commands fail to parse and are dropped
+// silently.
+describe("command wire format", () => {
+  it("serializes PlaceBuilding exactly as the server expects", () => {
+    const cmd: Command = placeBuilding("Refinery", [15, 11]);
+    expect(JSON.stringify(cmd)).toBe(
+      '{"PlaceBuilding":{"player":"P0","btype":"Refinery","tile":[15,11]}}',
+    );
+  });
+
+  it("wraps commands in the client message shape", () => {
+    const msg = { type: "commands", cmds: [placeBuilding("Barracks", [8, 8])] };
+    const parsed = JSON.parse(JSON.stringify(msg));
+    expect(parsed.type).toBe("commands");
+    expect(parsed.cmds[0].PlaceBuilding.player).toBe("P0");
+  });
+
+  it("serializes TrainUnit player as a string too", () => {
+    const cmd: Command = trainUnit(4, "Infantry");
+    expect(JSON.stringify(cmd)).toBe(
+      '{"TrainUnit":{"player":"P0","building":4,"utype":"Infantry"}}',
+    );
+  });
+});

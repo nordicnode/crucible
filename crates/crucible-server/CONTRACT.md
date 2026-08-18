@@ -25,9 +25,14 @@ M9 (champion & museum playable in the live lobby) implemented.**
   `/api/status`, `POST /api/match`. No auth in v1 (localhost); an auth hook is
   reserved in the router config for a future VPS deploy.
 - WebSocket live-match protocol (M3): client sends
-  `JoinMatch { opponent }` then `Commands { tick, cmds[] }`; server sends
+  `JoinMatch { opponent }` then `Commands { cmds[] }`; server sends
   `MatchStart`, per-tick fogged `StateDiff`, and `MatchEnd { result, replay_id }`.
   Invalid commands are rejected with a reason.
+- Command wire format is pinned by serde derives: `player` is the variant
+  name `"P0"`/`"P1"` (NOT an index), `btype`/`utype` are variant names.
+  The client pins this contract in `client/src/types.test.ts`, and the
+  canonical server-side dump lives in `crucible-sim/examples/wire_probe.rs`.
+  A drift here drops commands silently; the server logs such drops as WARN.
 - `opponent` is `easy` | `medium` | `hard` (scripted baselines),
   `champion` (the reigning champion genome), or `museum:{genome_id}` (any
   stored genome). A missing genome (e.g. no champion crowned yet) falls back

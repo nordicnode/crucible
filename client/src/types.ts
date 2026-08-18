@@ -7,15 +7,19 @@ export type UnitType = "Harvester" | "Infantry" | "Tank" | "Artillery";
 export type Stance = "Aggressive" | "Cautious" | "Hold";
 export type Upgrade = "None" | "Damage" | "Hp";
 
-export type Command =
-  | { PlaceBuilding: { player: number; btype: BuildingType; tile: [number, number] } }
-  | { TrainUnit: { player: number; building: number; utype: UnitType } }
-  | { MoveGroup: { player: number; units: number[]; waypoint: [number, number]; stance: Stance } }
-  | { SetRally: { player: number; building: number; waypoint: [number, number] } }
-  | { ChooseUpgrade: { player: number; lab: number; upgrade: Upgrade } }
-  | { Sell: { player: number; building: number } };
+// The server's serde format serializes `Player` as the variant name ("P0" /
+// "P1"), so commands must carry the string, not an index.
+export type Player = "P0" | "P1";
 
-export const PLAYER = 0;
+export type Command =
+  | { PlaceBuilding: { player: Player; btype: BuildingType; tile: [number, number] } }
+  | { TrainUnit: { player: Player; building: number; utype: UnitType } }
+  | { MoveGroup: { player: Player; units: number[]; waypoint: [number, number]; stance: Stance } }
+  | { SetRally: { player: Player; building: number; waypoint: [number, number] } }
+  | { ChooseUpgrade: { player: Player; lab: number; upgrade: Upgrade } }
+  | { Sell: { player: Player; building: number } };
+
+export const PLAYER: Player = "P0";
 
 export function placeBuilding(btype: BuildingType, tile: [number, number]): Command {
   return { PlaceBuilding: { player: PLAYER, btype, tile } };
