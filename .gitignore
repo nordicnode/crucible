@@ -17,6 +17,9 @@ client/src/wasm/*
 /data/*
 !/data/.gitignore
 
+# Working development plan (local planning doc, not part of the repo)
+CRUCIBLE_development_plan.md
+
 # Editor / OS
 .DS_Store
 *.swp
