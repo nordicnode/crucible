@@ -328,11 +328,13 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
 }
 
 fn unit_kind(u: UnitType) -> String {
-    format!("{u:?}").to_lowercase()
+    // Serde variant name, matching both the snapshot format and the client's
+    // renderer/selection kind strings ("Infantry", "Tank", …).
+    format!("{u:?}")
 }
 
 fn building_kind(b: BuildingType) -> String {
-    format!("{b:?}").to_lowercase()
+    format!("{b:?}")
 }
 
 fn event_kind(e: &crucible_sim::EventKind) -> String {

@@ -111,3 +111,123 @@ pub fn finish_replay(replay: &Replay) -> Game {
     }
     game
 }
+
+/// Rebuild the game state at an arbitrary tick, re-applying the command log
+/// exactly as it happened. Unlike [`replay_to_game`] (which advances to the
+/// *last* command first), this steps only to `tick`, so it supports seeking
+/// both forward and backward and is the basis for replay scrubbing.
+///
+/// Commands issued at the same tick are applied in their recorded order
+/// before that tick is stepped, matching the live match loop.
+pub fn replay_at_tick(replay: &Replay, tick: i32) -> Game {
+    let mut game = Game::new(
+        crate::map::Map::generate(replay.map_seed),
+        replay.config.clone(),
+    );
+    let mut cmds = replay.commands.iter().peekable();
+    while game.tick < tick && !game.is_over() {
+        while let Some(c) = cmds.peek() {
+            if c.tick == game.tick {
+                game.apply_commands(c.player, std::slice::from_ref(&c.command));
+                cmds.next();
+            } else {
+                break;
+            }
+        }
+        game.step();
+    }
+    game
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BuildingType, Command, Map, Player};
+
+    /// Drive a short match with a deterministic scripted commander, capturing
+    /// the serialized state at chosen ticks, while recording the same commands
+    /// into a replay. `replay_at_tick` must reproduce each captured tick.
+    fn drive_and_capture(
+        seed: u64,
+        timeout_ticks: i32,
+        capture_ticks: &[i32],
+    ) -> (Replay, Vec<Vec<u8>>) {
+        let cfg = GameConfig {
+            starting_ore: 100_000,
+            timeout_ticks,
+            ..GameConfig::default()
+        };
+        let mut game = Game::new(Map::generate(seed), cfg.clone());
+        let mut replay = Replay::new(seed, cfg);
+        let mut captures = Vec::new();
+        let mut next = 0usize;
+        let mut refineries = 0usize;
+
+        // Tick 0 is the pre-command initial state (no step has run yet).
+        if next < capture_ticks.len() && capture_ticks[next] == 0 {
+            captures.push(snapshot_bytes(&game));
+            next += 1;
+        }
+
+        while !game.is_over() {
+            if game.is_command_tick() && refineries < 2 {
+                let hq = game.hq(Player::P0).unwrap().tile;
+                let (dx, dy) = if refineries == 0 {
+                    (2i32, 0i32)
+                } else {
+                    (0, 2)
+                };
+                let cmd = Command::PlaceBuilding {
+                    player: Player::P0,
+                    btype: BuildingType::Refinery,
+                    tile: ((hq.0 as i32 + dx) as u8, (hq.1 as i32 + dy) as u8),
+                };
+                replay.record(game.tick, Player::P0, cmd.clone());
+                game.apply_commands(Player::P0, &[cmd]);
+                refineries += 1;
+            }
+            game.step();
+            if next < capture_ticks.len() && game.tick == capture_ticks[next] {
+                captures.push(snapshot_bytes(&game));
+                next += 1;
+            }
+        }
+        replay.result = Some(ReplayResult {
+            winner: game.winner,
+            reason: game.win_reason,
+            duration_ticks: game.tick,
+        });
+        (replay, captures)
+    }
+
+    #[test]
+    fn replay_at_tick_matches_direct_stepping() {
+        let capture_ticks = [0i32, 1, 19, 20, 21, 40, 41, 100, 200];
+        let (replay, captures) = drive_and_capture(2024, 300, &capture_ticks);
+        assert_eq!(captures.len(), capture_ticks.len());
+        for (tick, expected) in capture_ticks.iter().zip(&captures) {
+            assert_eq!(
+                &snapshot_bytes(&replay_at_tick(&replay, *tick)),
+                expected,
+                "replay_at_tick diverged at tick {tick}"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_at_tick_past_end_equals_finish() {
+        let (replay, _) = drive_and_capture(7, 300, &[]);
+        let finished = finish_replay(&replay);
+        let end = finished.tick;
+        assert_eq!(
+            snapshot_bytes(&replay_at_tick(&replay, end)),
+            snapshot_bytes(&replay_at_tick(&replay, end + 999)),
+            "seeking past the end must stay at the final state"
+        );
+        assert_eq!(
+            snapshot_bytes(&replay_at_tick(&replay, end)),
+            snapshot_bytes(&finished),
+            "replay_at_tick at the end must equal finish_replay"
+        );
+    }
+}

@@ -1,8 +1,10 @@
 # CONTRACT — crucible-client-wasm
 
 The `wasm-bindgen` shim exposing `crucible-sim` to the browser. **Status:
-replay execution (`replay_result`, `replay_snapshot_json`) and the
-wasm-bindgen-test/node golden-parity runner are implemented.**
+replay execution (`replay_result`, `replay_snapshot_json`), the lean spectate
+API (`replay_meta`, `replay_frame`), and the wasm-bindgen-test/node
+golden-parity runner are all implemented and wired into the client spectate
+screen.**
 
 Cross-target parity is proven in `tests/wasm_parity.rs`: the same
 `crucible_sim::golden` scenario that runs natively in
@@ -35,10 +37,14 @@ passthrough over `crucible-sim`, not a second implementation.
 ## 3. API surface
 
 - Exposes the minimum needed by `client/src/wasm/`: construct a game from a
-  replay (seed + config + commands), step to a tick, and return a snapshot as
-  JSON. `wasm_bindgen` bindings only; no DOM, no JS imports beyond the glue.
-- Versioned entry points (e.g., `replay_snapshot_json(replay_json, tick)`),
-  mirroring the `crucible-sim` replay format version.
+  replay (seed + config + commands), step to any tick, and return a snapshot
+  as JSON. `wasm_bindgen` bindings only; no DOM, no JS imports beyond the glue.
+- Versioned entry points mirroring the `crucible-sim` replay format version:
+  - `replay_meta(replay_json)` — map (passability, HQ spawns, ore layout) + outcome, once per replay.
+  - `replay_frame(replay_json, tick)` — one lean per-tick frame (entities + scores), supports seeking forward/backward.
+  - `replay_snapshot_json(replay_json, tick)` — full `Game` snapshot (hashes, diagnostics).
+  - `replay_result(replay_json)` — final outcome + FNV-1a snapshot hash for native/wasm parity.
+  - Frame `kind` strings use serde variant names (`"Infantry"`, `"Hq"`, …), the same convention as the live WS protocol.
 
 ## 4. Build contract
 

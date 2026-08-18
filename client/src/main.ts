@@ -4,6 +4,7 @@
 import { initDashboard } from "./dashboard";
 import { Net } from "./net";
 import { Renderer } from "./renderer";
+import { spectate } from "./spectate";
 import { World } from "./world";
 import {
   BUILDING_KINDS,
@@ -148,6 +149,13 @@ function tileAt(sx: number, sy: number): [number, number] {
 
 canvas.addEventListener("mousedown", (ev) => {
   const [sx, sy] = canvasPos(ev);
+  if (spectate.active) {
+    if (ev.button === 1) {
+      panning = true;
+      lastPan = [sx, sy];
+    }
+    return;
+  }
   if (ev.button === 0) {
     if (placementMode) {
       sendCommands([placeBuilding(placementMode, tileAt(sx, sy))]);
@@ -169,7 +177,8 @@ canvas.addEventListener("mousedown", (ev) => {
 canvas.addEventListener("mousemove", (ev) => {
   const [sx, sy] = canvasPos(ev);
   if (panning && lastPan) {
-    renderer.camera.pan(sx - lastPan[0], sy - lastPan[1]);
+    const cam = spectate.active ? spectate.renderer.camera : renderer.camera;
+    cam.pan(sx - lastPan[0], sy - lastPan[1]);
     lastPan = [sx, sy];
   } else if (dragStart) {
     dragCurrent = [sx, sy];
@@ -181,7 +190,7 @@ canvas.addEventListener("mouseup", (ev) => {
     panning = false;
     lastPan = null;
   }
-  if (ev.button !== 0 || !dragStart) return;
+  if (spectate.active || ev.button !== 0 || !dragStart) return;
   const start = dragStart;
   const [sx, sy] = canvasPos(ev);
   dragStart = null;
@@ -226,7 +235,8 @@ function selectAt(sx: number, sy: number, additive: boolean): void {
 canvas.addEventListener("wheel", (ev) => {
   ev.preventDefault();
   const [sx, sy] = canvasPos(ev);
-  renderer.camera.zoomAt(sx, sy, ev.deltaY < 0 ? 1.15 : 1 / 1.15);
+  const cam = spectate.active ? spectate.renderer.camera : renderer.camera;
+  cam.zoomAt(sx, sy, ev.deltaY < 0 ? 1.15 : 1 / 1.15);
 });
 
 canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
@@ -337,6 +347,16 @@ resize();
 function frame(): void {
   ctx.fillStyle = "#04060a";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (spectate.active) {
+    spectate.draw(ctx, canvas.width, canvas.height);
+    el("opponent").textContent = "spectating";
+    el("ore").textContent = `${spectate.score0} · ${spectate.score1}`;
+    el("clock").textContent = formatClock(spectate.currentTick);
+    requestAnimationFrame(frame);
+    return;
+  }
+
   renderer.draw(ctx, world, selection, canvas.width, canvas.height);
 
   if (dragStart && dragCurrent) {
@@ -420,6 +440,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-opp]").forEach((btn) => {
   btn.addEventListener("click", () => startMatch(btn.dataset.opp!, btn.dataset.label));
 });
 initDashboard();
+spectate.init();
 void initOpponentPicker();
 el("again").addEventListener("click", () => {
   el("result").classList.add("hidden");

@@ -6,6 +6,10 @@ node_modules/
 client/dist/
 *.tsbuildinfo
 
+# Generated wasm-bindgen bindings (built by scripts/build-wasm.sh)
+client/src/wasm/*
+!client/src/wasm/loader.ts
+
 # Freebuff local state
 .freebuff/
 

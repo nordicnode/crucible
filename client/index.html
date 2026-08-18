@@ -36,6 +36,10 @@
       table { border-collapse: collapse; width: 100%; font-size: 13px; }
       th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid #1b232c; }
       #dash-status { color: #f87171; min-height: 1.2em; }
+      #spectate-bar { bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center; }
+      #spectate-bar input[type="range"] { width: 200px; accent-color: #c8920e; }
+      #spectate-list-body { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+      .spectate-row { text-align: left; }
     </style>
   </head>
   <body>
@@ -51,6 +55,14 @@
     <div id="selection" class="hud hidden"></div>
     <div id="build-panel" class="hud hidden"></div>
     <div id="log" class="hud hidden"></div>
+    <div id="spectate-bar" class="hud hidden">
+      <button class="btn" id="sp-play">▶</button>
+      <button class="btn" id="sp-speed">1×</button>
+      <input type="range" id="sp-scrub" min="0" max="1" value="0" />
+      <span id="sp-clock">0:00</span>
+      <span id="sp-score"></span>
+      <button class="btn" id="sp-close">Close</button>
+    </div>
 
     <div id="overlay">
       <div class="panel" id="lobby">
@@ -67,6 +79,7 @@
         <div class="row" id="museum-opps"></div>
         <div class="row">
           <button class="btn" id="open-dashboard">Dashboard &amp; Museum</button>
+          <button class="btn" id="open-spectate">Spectate replays</button>
         </div>
       </div>
       <div class="panel hidden" id="result">
@@ -83,6 +96,12 @@
         <div id="dash-museum"></div>
         <div id="dash-events"></div>
         <div class="row"><button class="btn" id="dash-back">Back to lobby</button></div>
+      </div>
+      <div class="panel wide hidden" id="spectate-list">
+        <h1>REPLAYS</h1>
+        <div id="spectate-status"></div>
+        <div id="spectate-list-body"></div>
+        <div class="row"><button class="btn" id="spectate-list-back">Back to lobby</button></div>
       </div>
     </div>
 

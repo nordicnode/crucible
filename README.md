@@ -19,6 +19,7 @@ design. This README tracks what is actually implemented.
 - ✅ **M7 — Ghost league**
 - ✅ **M8 — Balance harness + tuning** (counter matrix committed as a 32-seed CI baseline; all three counters in the 35–65% band)
 - ✅ **Champion & museum playable** — the live lobby now offers the reigning champion and any museum champion as opponents, not just scripted bots
+- ✅ **Replay spectate** — any stored match can be watched step-by-step in the browser: the wasm shim re-runs the exact server sim from the input log (full state, no fog), with play/pause/speed/scrub
 
 > **M8 note:** the counter matrix is in-band and directionally correct
 > (tank > infantry 62%, artillery > tank 59%, infantry > artillery 56%).
@@ -87,6 +88,9 @@ cargo test -p crucible-client-wasm --target wasm32-unknown-unknown
 
 # Client
 cd client && npm install && npm run build && npm test
+#   npm run build now also builds the wasm replay shim (scripts/build-wasm.sh),
+#   which needs the wasm32-unknown-unknown target + wasm-bindgen-cli. For
+#   `npm run dev` (vite), generate the bindings once first: npm run wasm
 
 # Run the server (serves the built client on http://127.0.0.1:8787)
 cargo run -p crucible-server
