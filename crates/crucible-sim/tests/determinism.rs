@@ -21,6 +21,20 @@ fn golden_snapshots_are_stable() {
 }
 
 #[test]
+fn combat_snapshots_are_stable() {
+    // A second golden scenario whose playout includes a real battle (both
+    // armies attack each other), so the combat subsystem's determinism is
+    // pinned too, not just economy/training/movement.
+    let got = crucible_sim::golden::combat_hashes();
+    println!("combat golden hashes: {got:?}");
+    assert_eq!(
+        got,
+        crucible_sim::golden::COMBAT_GOLDEN,
+        "combat golden hash changed"
+    );
+}
+
+#[test]
 fn same_seed_replays_byte_identical() {
     for tick in [1i32, 50, 200, 999, 5_000] {
         let ga = crucible_sim::golden::playout(777, tick);

@@ -59,11 +59,13 @@ server-side.
   (map seed + ordered commands), not state dumps.
 
 Golden determinism tests hash the serialized state of a scripted match at fixed
-ticks and fail if any byte changes. The *same* scenario runs on native
+ticks and fail if any byte changes. The *same* scenarios run on native
 (`crucible-sim/tests/determinism.rs`) and under wasm
 (`crucible-client-wasm/tests/wasm_parity.rs`) against one shared set of golden
 constants (`crucible_sim::golden`), so native/wasm parity is enforced rather
-than assumed.
+than assumed. Two scenarios are pinned: one exercising economy/training/movement,
+and one that sends both armies into a real battle, so combat resolution
+(targeting, focus-fire, tank splash) is covered too.
 
 CI (`.github/workflows/ci.yml`) enforces `cargo fmt --check`, clippy
 (`-D warnings`), `cargo test --workspace`, the wasm32 build, the

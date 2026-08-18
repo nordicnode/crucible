@@ -18,9 +18,19 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
+      # The wasm-bindgen-cli version must match the wasm-bindgen crate in
+      # Cargo.lock, or the wasm test runner fails with an opaque version
+      # mismatch. Derive it from the lockfile so a bump moves both together.
+      - name: Resolve wasm-bindgen version from Cargo.lock
+        id: wasmbindgen
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version =' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          [ -n "$version" ] || { echo "could not find wasm-bindgen in Cargo.lock" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasm-bindgen@0.2.127
+          tool: wasm-bindgen@${{ steps.wasmbindgen.outputs.version }}
 
       - uses: Swatinem/rust-cache@v2
 

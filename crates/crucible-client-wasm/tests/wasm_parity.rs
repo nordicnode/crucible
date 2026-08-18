@@ -19,6 +19,16 @@ fn golden_hashes_match_native_constants() {
 }
 
 #[wasm_bindgen_test]
+fn combat_hashes_match_native_constants() {
+    let got = crucible_sim::golden::combat_hashes();
+    assert_eq!(
+        got,
+        crucible_sim::golden::COMBAT_GOLDEN,
+        "wasm combat golden hash drifted from native"
+    );
+}
+
+#[wasm_bindgen_test]
 fn same_seed_replays_byte_identical_under_wasm() {
     for tick in [1i32, 50, 200, 999, 5_000] {
         let ga = crucible_sim::golden::playout(777, tick);

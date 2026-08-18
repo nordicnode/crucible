@@ -163,6 +163,64 @@ pub fn playout(seed: u64, target_tick: i32) -> Game {
     g
 }
 
+/// Send each side's combat units toward the *enemy* HQ so the two armies meet
+/// and fight — exercising combat resolution (targeting, splash, focus-fire),
+/// which the movement-only scenario above deliberately avoids.
+pub fn issue_attack_orders(g: &mut Game) {
+    for p in Player::ALL {
+        let enemy_hq = g.hq(p.enemy()).unwrap().tile;
+        let combat: Vec<EntityId> = g
+            .units
+            .iter()
+            .filter(|u| u.owner == p && unit_stats(u.utype).damage > 0)
+            .map(|u| u.id)
+            .collect();
+        if !combat.is_empty() {
+            let _ = g.apply_commands(
+                p,
+                &[Command::MoveGroup {
+                    player: p,
+                    units: combat,
+                    waypoint: enemy_hq,
+                    stance: Stance::Aggressive,
+                }],
+            );
+        }
+    }
+}
+
+/// A second golden scenario whose playout includes a real battle (both armies
+/// attack each other), pinning the combat subsystem's determinism.
+pub fn combat_playout(seed: u64, target_tick: i32) -> Game {
+    let mut g = build_game(seed);
+    while g.tick < target_tick && !g.is_over() {
+        if g.tick == 1200 {
+            issue_attack_orders(&mut g);
+        }
+        g.step();
+    }
+    g
+}
+
+/// Combat-scenario golden hashes in `[tick 1500, tick 1900, tick 2400]` order.
+/// These ticks are deliberately mid-battle (units are dying across them), so
+/// the hashes pin combat resolution — targeting, focus-fire, and tank splash —
+/// rather than the pre/post-battle approach states.
+pub fn combat_hashes() -> [u64; 3] {
+    [
+        hash_snapshot(&combat_playout(SEED, 1_500)),
+        hash_snapshot(&combat_playout(SEED, 1_900)),
+        hash_snapshot(&combat_playout(SEED, 2_400)),
+    ]
+}
+
+/// The committed combat-golden values, in the same order as [`combat_hashes`].
+pub const COMBAT_GOLDEN: [u64; 3] = [
+    6901326970294770567,
+    7303699409838063195,
+    5042153433581969206,
+];
+
 /// The three golden snapshot hashes in `[tick 100, tick 1000, tick 10000]`
 /// order. Deterministic on native and wasm.
 pub fn golden_hashes() -> [u64; 3] {
