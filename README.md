@@ -59,6 +59,10 @@ server-side.
 Golden determinism tests hash the serialized state of a scripted match at fixed
 ticks and fail if any byte changes.
 
+CI (`.github/workflows/ci.yml`) enforces `cargo fmt --check`, clippy
+(`-D warnings`), `cargo test --workspace`, the wasm32 build, and the client
+build + tests on every push and PR.
+
 ## Building & testing
 
 ```bash
