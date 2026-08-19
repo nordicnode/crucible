@@ -52,7 +52,7 @@ and injected.
 
 1. `tick += 1`; APM budgets refill.
 2. Cooldowns decrement (units, then buildings).
-3. `economy_phase` — refinery trickle, harvester mining/hauling/dropoff/flee.
+3. `economy_phase` — harvester mining/hauling/dock-and-deposit/flee (income comes only from deposits; refineries give no passive trickle).
 4. `production_phase` — queues progress; completed units spawn (id order).
 5. `combat_phase` — per combat unit: acquire target, move, fire (id order).
 6. `turret_phase` — turrets fire (id order).

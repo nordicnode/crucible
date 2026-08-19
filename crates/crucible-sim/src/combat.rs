@@ -206,27 +206,23 @@ impl Game {
         let range2 = (stats.range as i64) * (stats.range as i64);
         let mut fired = false;
 
-        let target = self
-            .units
+        let enemies = self.enemies_of(enemy);
+        let target = enemies
             .iter()
-            .filter(|u| {
-                u.owner == enemy && u.is_alive() && dist2(pos.x, pos.y, u.pos.x, u.pos.y) <= range2
-            })
+            .filter(|e| dist2(pos.x, pos.y, e.pos.x, e.pos.y) <= range2)
             .min_by(|a, b| a.hp.cmp(&b.hp).then_with(|| a.id.cmp(&b.id)))
-            .map(|u| u.id);
+            .map(|e| (e.id, e.building));
 
-        if let Some(t) = target {
+        if let Some((t, is_bld)) = target {
             if cooldown <= 0 {
                 let dmg = apply_damage_upgrade(stats.damage, self.upgrades[owner.index()]);
                 fired = true;
-                self.apply_damage(t, false, dmg);
+                self.apply_damage(t, is_bld, dmg);
             }
         }
-        self.buildings[idx].cooldown = if fired {
-            stats.cooldown
-        } else {
-            cooldown.max(0)
-        };
+        if fired {
+            self.buildings[idx].cooldown = stats.cooldown;
+        }
     }
 
     /// Apply damage to a unit or building; records the death event.

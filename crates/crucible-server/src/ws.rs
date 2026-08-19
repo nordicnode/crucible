@@ -52,6 +52,8 @@ struct MatchStartMsg {
 struct StateDiffMsg {
     tick: i32,
     ore: i32,
+    power_produced: i32,
+    power_consumed: i32,
     entities: Vec<DiffEntity>,
     ore_tiles: Vec<OreTile>,
     visible: Vec<u16>,
@@ -88,6 +90,9 @@ struct DiffEntity {
     /// Build time of the current queue head, in ticks.
     #[serde(skip_serializing_if = "Option::is_none")]
     build_time: Option<i32>,
+    /// Rally point for produced units (tile coords [x, y]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rally: Option<(u8, u8)>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -101,6 +106,14 @@ struct OreTile {
 struct DiffEvent {
     tick: i32,
     kind: String,
+    /// Deposit amount for `ore_deposited` events (null otherwise) — lets the
+    /// client show real harvest income, since refineries give no passive
+    /// income.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    amount: Option<i32>,
+    /// Index of the player associated with this event (0 = P0, 1 = P1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    player: Option<u8>,
 }
 
 pub async fn handler(
@@ -268,6 +281,7 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
                 queue: None,
                 progress: None,
                 build_time: None,
+                rally: None,
             });
         }
     }
@@ -295,6 +309,7 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
                 queue,
                 progress,
                 build_time,
+                rally: b.rally,
             });
         }
     }
@@ -312,6 +327,7 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
             queue: None,
             progress: None,
             build_time: None,
+            rally: None,
         });
     }
     for m in &view.buildings {
@@ -327,6 +343,7 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
             queue: None,
             progress: None,
             build_time: None,
+            rally: None,
         });
     }
 
@@ -353,16 +370,40 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
         .events
         .iter()
         .filter(|e| e.tick > *last_event_tick)
-        .map(|e| DiffEvent {
-            tick: e.tick,
-            kind: event_kind(&e.kind),
+        .map(|e| {
+            let player = match &e.kind {
+                crucible_sim::EventKind::BuildingPlaced { player, .. }
+                | crucible_sim::EventKind::UnitTrained { player, .. }
+                | crucible_sim::EventKind::OreDeposited { player, .. }
+                | crucible_sim::EventKind::Sold { player, .. }
+                | crucible_sim::EventKind::UpgradeChosen { player, .. } => {
+                    Some(player.index() as u8)
+                }
+                crucible_sim::EventKind::UnitDied { owner, .. }
+                | crucible_sim::EventKind::BuildingDestroyed { owner, .. } => {
+                    Some(owner.index() as u8)
+                }
+            };
+            DiffEvent {
+                tick: e.tick,
+                kind: event_kind(&e.kind),
+                amount: match &e.kind {
+                    crucible_sim::EventKind::OreDeposited { amount, .. } => Some(*amount),
+                    crucible_sim::EventKind::Sold { refund, .. } => Some(*refund),
+                    _ => None,
+                },
+                player,
+            }
         })
         .collect();
     *last_event_tick = game.tick;
+    let (power_produced, power_consumed) = game.power(crucible_sim::Player::P0);
 
     ServerMsg::StateDiff(StateDiffMsg {
         tick: game.tick,
         ore: game.ore[0],
+        power_produced,
+        power_consumed,
         entities,
         ore_tiles,
         visible,
@@ -392,7 +433,9 @@ fn event_kind(e: &crucible_sim::EventKind) -> String {
             format!("built:{btype:?}").to_lowercase()
         }
         crucible_sim::EventKind::Sold { .. } => "sold".into(),
-        crucible_sim::EventKind::UpgradeChosen { .. } => "upgrade".into(),
+        crucible_sim::EventKind::UpgradeChosen { upgrade, .. } => {
+            format!("upgrade:{upgrade:?}").to_lowercase()
+        }
     }
 }
 fn seed_now() -> u64 {

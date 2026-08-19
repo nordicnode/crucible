@@ -2,7 +2,7 @@
 // The client never implements game rules; it only renders fogged state and
 // sends the same commands the sim validates.
 
-export type BuildingType = "Hq" | "Refinery" | "Barracks" | "Factory" | "TechLab" | "Turret";
+export type BuildingType = "Hq" | "PowerPlant" | "Refinery" | "Barracks" | "Factory" | "TechLab" | "Airfield" | "Turret";
 export type UnitType = "Harvester" | "Infantry" | "Tank" | "Artillery";
 export type Stance = "Aggressive" | "Cautious" | "Hold";
 export type Upgrade = "None" | "Damage" | "Hp";
@@ -17,7 +17,8 @@ export type Command =
   | { MoveGroup: { player: Player; units: number[]; waypoint: [number, number]; stance: Stance } }
   | { SetRally: { player: Player; building: number; waypoint: [number, number] } }
   | { ChooseUpgrade: { player: Player; lab: number; upgrade: Upgrade } }
-  | { Sell: { player: Player; building: number } };
+  | { Sell: { player: Player; building: number } }
+  | { Repair: { player: Player; building: number } };
 
 export const PLAYER: Player = "P0";
 
@@ -39,6 +40,9 @@ export function chooseUpgrade(lab: number, upgrade: Upgrade): Command {
 export function sell(building: number): Command {
   return { Sell: { player: PLAYER, building } };
 }
+export function repair(building: number): Command {
+  return { Repair: { player: PLAYER, building } };
+}
 
 export interface DiffEntity {
   id: number;
@@ -55,6 +59,8 @@ export interface DiffEntity {
   progress?: number;
   /** Build time of the current queue head, in ticks. */
   buildTime?: number;
+  /** Rally point tile for produced units [x, y]. */
+  rally?: [number, number];
 }
 
 export interface OreTile {
@@ -66,11 +72,25 @@ export interface OreTile {
 export interface DiffEvent {
   tick: number;
   kind: string;
+  /** Deposit amount for `ore_deposited` events (undefined otherwise). */
+  amount?: number;
+  /** Player index (0 = P0/friendly, 1 = P1/enemy). */
+  player?: number;
 }
 
 export type ServerMsg =
   | { type: "matchStart"; mapSeed: number; player: number; passable: boolean[]; hq: [number, number][] }
-  | { type: "stateDiff"; tick: number; ore: number; entities: DiffEntity[]; oreTiles: OreTile[]; visible: number[]; events: DiffEvent[] }
+  | {
+      type: "stateDiff";
+      tick: number;
+      ore: number;
+      powerProduced?: number;
+      powerConsumed?: number;
+      entities: DiffEntity[];
+      oreTiles: OreTile[];
+      visible: number[];
+      events: DiffEvent[];
+    }
   | { type: "matchEnd"; winner: number | null; reason: string | null; durationTicks: number; replayId: number | null };
 
 export type ClientMsg =
@@ -78,11 +98,24 @@ export type ClientMsg =
   | { type: "commands"; cmds: Command[] };
 
 export const BUILD_COSTS: Record<string, number> = {
+  PowerPlant: 150,
   Refinery: 300,
   Barracks: 150,
   Factory: 250,
   TechLab: 200,
+  Airfield: 250,
   Turret: 100,
+};
+
+export const BUILDING_POWER: Record<string, { produces: number; consumes: number }> = {
+  Hq: { produces: 50, consumes: 0 },
+  PowerPlant: { produces: 100, consumes: 0 },
+  Refinery: { produces: 0, consumes: 20 },
+  Barracks: { produces: 0, consumes: 15 },
+  Factory: { produces: 0, consumes: 25 },
+  TechLab: { produces: 0, consumes: 30 },
+  Airfield: { produces: 0, consumes: 25 },
+  Turret: { produces: 0, consumes: 20 },
 };
 
 export const UNIT_COSTS: Record<string, number> = {
@@ -93,4 +126,4 @@ export const UNIT_COSTS: Record<string, number> = {
 };
 
 export const UNIT_KINDS = new Set(["Harvester", "Infantry", "Tank", "Artillery"]);
-export const BUILDING_KINDS = new Set(["Hq", "Refinery", "Barracks", "Factory", "TechLab", "Turret"]);
+export const BUILDING_KINDS = new Set(["Hq", "PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Turret"]);

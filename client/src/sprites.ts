@@ -1,5 +1,6 @@
-// High-detail procedural vector / Canvas 2D sprite rendering system for Crucible.
-// Renders crisp, scalable tactical sprites for terrain, buildings, units, and FX.
+// Command & Conquer Elite Retro Pixel-Art Custom Sprite Engine for Crucible.
+// Features 2.5D isometric elevation, volumetric crystal fields, industrial details,
+// multi-tier lighting, hazard striping, and dynamic mechanical animations.
 
 export interface TeamPalette {
   primary: string;
@@ -10,37 +11,33 @@ export interface TeamPalette {
 }
 
 export const TEAM_BLUE: TeamPalette = {
-  primary: "#2563eb",
-  primaryLight: "#60a5fa",
-  primaryDark: "#1d4ed8",
+  primary: "#1d4ed8",
+  primaryLight: "#3b82f6",
+  primaryDark: "#1e3a8a",
   accent: "#93c5fd",
   glow: "rgba(59, 130, 246, 0.6)",
 };
 
 export const TEAM_RED: TeamPalette = {
-  primary: "#dc2626",
-  primaryLight: "#f87171",
-  primaryDark: "#b91c1c",
+  primary: "#b91c1c",
+  primaryLight: "#ef4444",
+  primaryDark: "#7f1d1d",
   accent: "#fca5a5",
   glow: "rgba(239, 68, 68, 0.6)",
 };
 
 export const TEAM_STALE: TeamPalette = {
-  primary: "#4b5563",
-  primaryLight: "#9ca3af",
-  primaryDark: "#374151",
-  accent: "#d1d5db",
-  glow: "rgba(156, 163, 175, 0.3)",
+  primary: "#374151",
+  primaryLight: "#6b7280",
+  primaryDark: "#1f2937",
+  accent: "#9ca3af",
+  glow: "rgba(107, 114, 128, 0.3)",
 };
 
 export function getTeamPalette(owner: number, isStale: boolean = false): TeamPalette {
   if (isStale) return TEAM_STALE;
   return owner === 0 ? TEAM_BLUE : TEAM_RED;
 }
-
-// ---------------------------------------------------------------------------
-// Hash helpers for deterministic tile variations
-// ---------------------------------------------------------------------------
 
 function tileHash(tx: number, ty: number): number {
   let h = (tx * 374761393 + ty * 668265263) ^ 0x5bf03635;
@@ -49,7 +46,48 @@ function tileHash(tx: number, ty: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Terrain Rendering
+// Pixel Art Drawing Helpers (Grid-snapped, integer alignment)
+// ---------------------------------------------------------------------------
+
+function pRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string): void {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.floor(x), Math.floor(y), Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)));
+}
+
+function pStroke(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string): void {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(Math.floor(x) + 0.5, Math.floor(y) + 0.5, Math.floor(w) - 1, Math.floor(h) - 1);
+}
+
+function pDither(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c1: string, c2: string): void {
+  pRect(ctx, x, y, w, h, c1);
+  ctx.fillStyle = c2;
+  const ix0 = Math.floor(x);
+  const iy0 = Math.floor(y);
+  const ix1 = ix0 + Math.floor(w);
+  const iy1 = iy0 + Math.floor(h);
+  for (let py = iy0; py < iy1; py += 2) {
+    for (let px = ix0 + (py % 4 === 0 ? 0 : 1); px < ix1; px += 2) {
+      ctx.fillRect(px, py, 1, 1);
+    }
+  }
+}
+
+function pHazard(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  pRect(ctx, x, y, w, h, "#ca8a04");
+  ctx.fillStyle = "#09090b";
+  const ix0 = Math.floor(x);
+  const iy0 = Math.floor(y);
+  const iw = Math.floor(w);
+  const ih = Math.floor(h);
+  for (let px = ix0; px < ix0 + iw; px += 4) {
+    ctx.fillRect(px, iy0, 2, ih);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Terrain Sprites (Tactical C&C Pixel Soil & Fractured Rock Outcroppings)
 // ---------------------------------------------------------------------------
 
 export function drawPassableTile(
@@ -65,45 +103,29 @@ export function drawPassableTile(
   const variant = h % 4;
 
   if (isExploredOnly) {
-    ctx.fillStyle = "#0c1510";
-    ctx.fillRect(px, py, size, size);
-    ctx.strokeStyle = "#080e0b";
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(px, py, size, size);
+    pRect(ctx, px, py, size, size, "#090d0b");
+    pStroke(ctx, px, py, size, size, "#040705");
     return;
   }
 
-  // Base ground: tactical dark slate/moss ground
-  const baseColors = ["#16281c", "#182c1f", "#14251a", "#1a3022"];
-  ctx.fillStyle = baseColors[variant];
-  ctx.fillRect(px, py, size, size);
+  // Gritty tactical C&C earth palette
+  const groundBases = ["#1b2d1d", "#1e3221", "#18281a", "#213624"];
+  pRect(ctx, px, py, size, size, groundBases[variant]);
 
-  // Subtle grid seam
-  ctx.strokeStyle = "rgba(10, 20, 14, 0.5)";
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(px, py, size, size);
+  // Subtle 1px grid seam
+  pStroke(ctx, px, py, size, size, "#101d12");
 
-  // Micro-texture details based on variant
-  if (size >= 10) {
+  // Surface texture details (cracked soil, gravel clusters, tech seams)
+  if (size >= 8) {
     if (variant === 1) {
-      // Tech floor panel seam
-      ctx.strokeStyle = "rgba(45, 80, 55, 0.25)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(px + 2, py + size / 2);
-      ctx.lineTo(px + size - 2, py + size / 2);
-      ctx.stroke();
+      pRect(ctx, px + size * 0.2, py + size * 0.35, size * 0.25, 1, "#2e4a32");
+      pRect(ctx, px + size * 0.5, py + size * 0.65, size * 0.3, 1, "#2e4a32");
     } else if (variant === 2) {
-      // Corner rivet dots
-      ctx.fillStyle = "rgba(40, 75, 50, 0.4)";
-      const d = Math.max(1, size * 0.08);
-      ctx.fillRect(px + 2, py + 2, d, d);
-      ctx.fillRect(px + size - 2 - d, py + size - 2 - d, d, d);
+      pRect(ctx, px + size * 0.3, py + size * 0.4, 2, 2, "#0d180f");
+      pRect(ctx, px + size * 0.7, py + size * 0.6, 2, 2, "#3b5c40");
+      pRect(ctx, px + size * 0.75, py + size * 0.65, 1, 1, "#4d7853");
     } else if (variant === 3) {
-      // Subtle terrain grit
-      ctx.fillStyle = "rgba(50, 90, 60, 0.25)";
-      ctx.fillRect(px + size * 0.3, py + size * 0.3, size * 0.15, size * 0.15);
-      ctx.fillRect(px + size * 0.65, py + size * 0.6, size * 0.12, size * 0.12);
+      pDither(ctx, px + size * 0.25, py + size * 0.2, size * 0.5, size * 0.5, groundBases[variant], "#253e2a");
     }
   }
 }
@@ -120,70 +142,41 @@ export function drawImpassableTile(
   const h = tileHash(tx, ty);
 
   if (isExploredOnly) {
-    ctx.fillStyle = "#121519";
-    ctx.fillRect(px, py, size, size);
-    ctx.strokeStyle = "#0d0f12";
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(px, py, size, size);
+    pRect(ctx, px, py, size, size, "#0f1318");
+    pStroke(ctx, px, py, size, size, "#080a0d");
     return;
   }
 
-  // Impassable rock / armored barrier
-  ctx.fillStyle = "#22272e";
-  ctx.fillRect(px, py, size, size);
+  // 2.5D Basaltic rock formation
+  pRect(ctx, px, py, size, size, "#1c222b");
 
-  // 3D Bevel: top and left highlight
-  ctx.fillStyle = "#38414e";
-  ctx.beginPath();
-  ctx.moveTo(px, py);
-  ctx.lineTo(px + size, py);
-  ctx.lineTo(px + size - 2, py + 2);
-  ctx.lineTo(px + 2, py + 2);
-  ctx.lineTo(px + 2, py + size - 2);
-  ctx.lineTo(px, py + size);
-  ctx.closePath();
-  ctx.fill();
+  // Top & Left 2px bright highlight bevel (light from North-West)
+  pRect(ctx, px, py, size, 2, "#384556");
+  pRect(ctx, px, py, 2, size, "#384556");
+  pRect(ctx, px + 1, py + 1, size - 2, 1, "#4f5f75");
 
-  // 3D Bevel: bottom and right shadow
-  ctx.fillStyle = "#14181c";
-  ctx.beginPath();
-  ctx.moveTo(px + size, py);
-  ctx.lineTo(px + size, py + size);
-  ctx.lineTo(px, py + size);
-  ctx.lineTo(px + 2, py + size - 2);
-  ctx.lineTo(px + size - 2, py + size - 2);
-  ctx.lineTo(px + size - 2, py + 2);
-  ctx.closePath();
-  ctx.fill();
+  // Bottom & Right 2px deep shadow bevel
+  pRect(ctx, px, py + size - 2, size, 2, "#0b0e12");
+  pRect(ctx, px + size - 2, py, 2, size, "#0b0e12");
 
-  // Inner rock face texture / fissure
-  if (size >= 12) {
-    const v = h % 3;
-    ctx.fillStyle = "#2c333d";
-    ctx.fillRect(px + 3, py + 3, size - 6, size - 6);
-
-    ctx.strokeStyle = "#1a1f26";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    if (v === 0) {
-      ctx.moveTo(px + 4, py + size * 0.4);
-      ctx.lineTo(px + size * 0.6, py + size * 0.5);
-      ctx.lineTo(px + size - 4, py + size * 0.8);
-    } else if (v === 1) {
-      ctx.moveTo(px + size * 0.5, py + 4);
-      ctx.lineTo(px + size * 0.4, py + size * 0.6);
-      ctx.lineTo(px + size * 0.7, py + size - 4);
+  // Crag fissure crevasse
+  const fv = h % 3;
+  if (size >= 10) {
+    if (fv === 0) {
+      pRect(ctx, px + size * 0.35, py + 3, 2, size * 0.45, "#0b0e12");
+      pRect(ctx, px + size * 0.45, py + size * 0.45, size * 0.35, 2, "#0b0e12");
+      pRect(ctx, px + size * 0.35 - 1, py + 4, 1, size * 0.25, "#252d38");
+    } else if (fv === 1) {
+      pRect(ctx, px + 3, py + size * 0.4, size * 0.55, 2, "#0b0e12");
+      pRect(ctx, px + size * 0.55, py + size * 0.4, 2, size * 0.4, "#0b0e12");
     } else {
-      ctx.moveTo(px + 4, py + size - 4);
-      ctx.lineTo(px + size * 0.5, py + size * 0.5);
-      ctx.lineTo(px + size - 4, py + 4);
+      pDither(ctx, px + 3, py + 3, size - 6, size - 6, "#252d38", "#1c222b");
     }
-    ctx.stroke();
   }
 }
 
 // ---------------------------------------------------------------------------
-// Ore Deposit Rendering
+// Ore Deposit: Volumetric Command & Conquer Tiberite Crystal Field
 // ---------------------------------------------------------------------------
 
 export function drawOreDeposit(
@@ -196,586 +189,77 @@ export function drawOreDeposit(
 ): void {
   const cx = px + size * 0.5;
   const cy = py + size * 0.5;
-  const scale = Math.min(1, Math.max(0.4, amount / 400));
-  const s = size * 0.42 * scale;
+  const scale = Math.min(1.0, Math.max(0.5, amount / 500));
+  const s = size * 0.22 * scale;
+  const seed = (Math.floor(px * 23 + py * 41)) % 100;
 
-  // Ambient gold ground glow
-  const glowGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, s * 1.6);
-  glowGrad.addColorStop(0, "rgba(234, 179, 8, 0.35)");
-  glowGrad.addColorStop(0.7, "rgba(161, 98, 7, 0.12)");
-  glowGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
-  ctx.fillStyle = glowGrad;
-  ctx.beginPath();
-  ctx.arc(cx, cy, s * 1.6, 0, Math.PI * 2);
-  ctx.fill();
+  // 1. Subtle golden ambient ground shimmer
+  const glowR = Math.floor(s * 1.5);
+  ctx.fillStyle = "rgba(234, 179, 8, 0.18)";
+  ctx.fillRect(Math.floor(cx - glowR), Math.floor(cy - glowR * 0.6), glowR * 2, glowR * 1.2);
+  ctx.fillStyle = "rgba(250, 204, 21, 0.12)";
+  ctx.fillRect(Math.floor(cx - glowR * 0.5), Math.floor(cy - glowR * 0.3), glowR, glowR * 0.6);
 
-  // Subtle sparkle pulse based on tick
-  const shimmer = 0.85 + Math.sin(tick * 0.08 + (cx % 10)) * 0.15;
+  // 2. Compact bedrock nodule with molten gold veins
+  pRect(ctx, cx - s * 0.85, cy + s * 0.05, s * 1.7, s * 0.45, "#18181b");
+  pRect(ctx, cx - s * 0.7, cy, s * 1.4, s * 0.25, "#27272a");
 
-  // Multi-crystal cluster coordinates [dx, dy, widthScale, heightScale]
+  // Molten golden fissure veins
+  pRect(ctx, cx - s * 0.5, cy + s * 0.2, s * 0.4, 1.5, "#eab308");
+  pRect(ctx, cx + s * 0.1, cy + s * 0.25, s * 0.45, 1.5, "#facc15");
+
+  // 3. Compact Faceted Crystal Mineral Nuggets: [dx, dy, w, h, lean, phase]
   const crystals = [
-    { dx: 0, dy: s * 0.1, w: s * 0.38, h: s * 0.95 },
-    { dx: -s * 0.45, dy: s * 0.25, w: s * 0.3, h: s * 0.7 },
-    { dx: s * 0.45, dy: s * 0.2, w: s * 0.32, h: s * 0.75 },
+    { dx: -s * 0.55, dy: s * 0.1, w: Math.max(2.5, s * 0.28), h: s * 0.6, lean: -0.5, phase: 1.0 },
+    { dx: s * 0.5, dy: s * 0.12, w: Math.max(2.5, s * 0.26), h: s * 0.55, lean: 0.5, phase: 2.7 },
+    { dx: -s * 0.25, dy: -s * 0.05, w: Math.max(3, s * 0.34), h: s * 0.85, lean: -0.3, phase: 0.4 },
+    { dx: s * 0.25, dy: 0, w: Math.max(3, s * 0.35), h: s * 0.8, lean: 0.3, phase: 3.1 },
+    { dx: 0, dy: -s * 0.1, w: Math.max(3.5, s * 0.4), h: s * 0.95, lean: 0, phase: 4.5 },
+    { dx: s * 0.12, dy: s * 0.18, w: Math.max(2.5, s * 0.24), h: s * 0.45, lean: 0.5, phase: 5.2 },
   ];
 
-  if (scale > 0.7) {
-    crystals.push({ dx: -s * 0.2, dy: -s * 0.3, w: s * 0.25, h: s * 0.6 });
-    crystals.push({ dx: s * 0.25, dy: -s * 0.25, w: s * 0.24, h: s * 0.55 });
+  for (let i = 0; i < crystals.length; i++) {
+    const c = crystals[i];
+    const x = Math.floor(cx + c.dx);
+    const y = Math.floor(cy + c.dy);
+    const w = Math.floor(c.w);
+    const h = Math.floor(c.h);
+    const halfW = Math.floor(w / 2);
+
+    const shimmer = Math.sin(tick * 0.25 + c.phase + seed) > 0.4;
+
+    // Hard dark amber outline
+    pRect(ctx, x - halfW - 1, y - h - 1, w + 2, h + 2, "#451a03");
+
+    // Right dark amber shadow facet (East face)
+    pRect(ctx, x, y - h, halfW, h, "#92400e");
+    pRect(ctx, x + 0.5, y - h + 1, Math.max(1, halfW - 1), h - 1, "#b45309");
+
+    // Left bright sunlit gold facet (West face)
+    pRect(ctx, x - halfW, y - h, halfW, h, "#eab308");
+    pRect(ctx, x - halfW + 0.5, y - h + 0.5, Math.max(1, halfW - 0.5), h - 1, "#facc15");
+
+    // Pointed crystal tip
+    pRect(ctx, x - 0.5 + c.lean, y - h - 1.5, 1.5, 1.5, "#fef08a");
+
+    // Dynamic specular sparkle
+    if (shimmer) {
+      pRect(ctx, x - 1 + c.lean, y - h - 2, 2, 2, "#ffffff");
+      pRect(ctx, x - 2 + c.lean, y - h - 1, 4, 1, "#ffffff");
+    }
   }
 
-  for (const c of crystals) {
-    const x = cx + c.dx;
-    const y = cy + c.dy;
-    const w = c.w;
-    const h = c.h;
-
-    // Dark facet / outline base
-    ctx.beginPath();
-    ctx.moveTo(x, y - h);
-    ctx.lineTo(x + w, y);
-    ctx.lineTo(x, y + h * 0.4);
-    ctx.lineTo(x - w, y);
-    ctx.closePath();
-    ctx.fillStyle = "#713f12";
-    ctx.fill();
-    ctx.strokeStyle = "#451a03";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // Right shaded facet
-    ctx.beginPath();
-    ctx.moveTo(x, y - h);
-    ctx.lineTo(x + w, y);
-    ctx.lineTo(x, y + h * 0.4);
-    ctx.closePath();
-    ctx.fillStyle = "#ca8a04";
-    ctx.fill();
-
-    // Left illuminated facet
-    ctx.beginPath();
-    ctx.moveTo(x, y - h);
-    ctx.lineTo(x, y + h * 0.4);
-    ctx.lineTo(x - w, y);
-    ctx.closePath();
-    ctx.fillStyle = "#eab308";
-    ctx.fill();
-
-    // Specular ridge highlight
-    ctx.beginPath();
-    ctx.moveTo(x, y - h + 1);
-    ctx.lineTo(x - w * 0.2, y - h * 0.2);
-    ctx.lineTo(x, y + h * 0.2);
-    ctx.closePath();
-    ctx.fillStyle = `rgba(254, 240, 138, ${shimmer})`;
-    ctx.fill();
+  // 4. Subtle floating mineral glint
+  const sporePhase = (tick * 0.1 + seed) % 10;
+  if (sporePhase < 4) {
+    const sporeY = cy - s * 0.5 - sporePhase * 1.5;
+    const sporeX = cx + Math.sin(tick * 0.2 + seed) * (s * 0.5);
+    pRect(ctx, sporeX, sporeY, 1.5, 1.5, "#fef08a");
   }
 }
 
 // ---------------------------------------------------------------------------
-// Building Sprites
-// ---------------------------------------------------------------------------
-
-export function drawBuildingSprite(
-  ctx: CanvasRenderingContext2D,
-  kind: string,
-  px: number,
-  py: number,
-  zoom: number,
-  owner: number,
-  tick: number,
-  isStale: boolean = false,
-  progress: number = 0,
-  buildTime: number = 0,
-): void {
-  const pal = getTeamPalette(owner, isStale);
-
-  ctx.save();
-  ctx.translate(px, py);
-
-  switch (kind) {
-    case "Hq":
-      drawHq(ctx, zoom, pal, tick);
-      break;
-    case "Refinery":
-      drawRefinery(ctx, zoom, pal, tick);
-      break;
-    case "Barracks":
-      drawBarracks(ctx, zoom, pal, tick);
-      break;
-    case "Factory":
-      drawFactory(ctx, zoom, pal, tick);
-      break;
-    case "TechLab":
-      drawTechLab(ctx, zoom, pal, tick);
-      break;
-    case "Turret":
-      drawTurret(ctx, zoom, pal, tick);
-      break;
-    default:
-      // Fallback
-      ctx.fillStyle = pal.primary;
-      ctx.fillRect(-zoom * 0.4, -zoom * 0.4, zoom * 0.8, zoom * 0.8);
-  }
-
-  // Production progress mini-indicator on the building if producing
-  if (buildTime > 0 && progress > 0) {
-    const frac = Math.min(1, progress / buildTime);
-    const bw = zoom * 0.7;
-    const bh = Math.max(2, zoom * 0.08);
-    const by = zoom * 0.45;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-    ctx.fillRect(-bw / 2, by, bw, bh);
-    ctx.fillStyle = "#eab308";
-    ctx.fillRect(-bw / 2, by, bw * frac, bh);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(-bw / 2, by, bw, bh);
-  }
-
-  ctx.restore();
-}
-
-/** HQ: Large Command Citadel with armored bunker hull, comms dish & glowing command deck */
-function drawHq(
-  ctx: CanvasRenderingContext2D,
-  z: number,
-  pal: TeamPalette,
-  tick: number,
-): void {
-  const r = z * 0.48;
-
-  // Ground drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-  ctx.beginPath();
-  drawChamferedRect(ctx, -r - 1, -r + 2, (r + 1) * 2, (r + 1) * 2, 4);
-  ctx.fill();
-
-  // Outer armored hull (octagonal / chamfered)
-  ctx.fillStyle = "#1e242c";
-  ctx.strokeStyle = "#333d4b";
-  ctx.lineWidth = 1.5;
-  drawChamferedRect(ctx, -r, -r, r * 2, r * 2, r * 0.25);
-  ctx.fill();
-  ctx.stroke();
-
-  // Corner armor plating & rivets
-  ctx.fillStyle = "#2d3748";
-  const cr = r * 0.35;
-  ctx.fillRect(-r + 1, -r + 1, cr, cr);
-  ctx.fillRect(r - 1 - cr, -r + 1, cr, cr);
-  ctx.fillRect(-r + 1, r - 1 - cr, cr, cr);
-  ctx.fillRect(r - 1 - cr, r - 1 - cr, cr, cr);
-
-  // Team-colored command deck wing plates
-  ctx.fillStyle = pal.primary;
-  ctx.fillRect(-r * 0.6, -r * 0.85, r * 1.2, r * 0.28);
-  ctx.fillRect(-r * 0.6, r * 0.57, r * 1.2, r * 0.28);
-
-  ctx.fillStyle = pal.primaryLight;
-  ctx.fillRect(-r * 0.5, -r * 0.8, r * 1.0, 1.5);
-  ctx.fillRect(-r * 0.5, r * 0.62, r * 1.0, 1.5);
-
-  // Central command bridge dome
-  const bridgeR = r * 0.45;
-  ctx.fillStyle = "#111827";
-  ctx.beginPath();
-  ctx.arc(0, 0, bridgeR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Pulsing central holographic core / comms beacon
-  const pulse = 0.6 + Math.sin(tick * 0.15) * 0.4;
-  ctx.fillStyle = pal.accent;
-  ctx.beginPath();
-  ctx.arc(0, 0, bridgeR * 0.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = `rgba(255, 255, 255, ${pulse})`;
-  ctx.beginPath();
-  ctx.arc(0, 0, bridgeR * 0.25, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Comms antenna dish
-  const dishAngle = tick * 0.04;
-  ctx.strokeStyle = "#94a3b8";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(r * 0.5, -r * 0.5);
-  ctx.lineTo(r * 0.5 + Math.cos(dishAngle) * (r * 0.25), -r * 0.5 + Math.sin(dishAngle) * (r * 0.25));
-  ctx.stroke();
-
-  // Blinking red/green beacon light on the antenna tip
-  const blink = (tick % 20 < 10);
-  ctx.fillStyle = blink ? "#ef4444" : "#22c55e";
-  ctx.beginPath();
-  ctx.arc(r * 0.5 + Math.cos(dishAngle) * (r * 0.25), -r * 0.5 + Math.sin(dishAngle) * (r * 0.25), 1.5, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** Refinery: Industrial smelting complex with ore hopper, furnace vat & twin smokestacks */
-function drawRefinery(
-  ctx: CanvasRenderingContext2D,
-  z: number,
-  pal: TeamPalette,
-  tick: number,
-): void {
-  const r = z * 0.4;
-
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.fillRect(-r, -r + 2, r * 2, r * 2);
-
-  // Main factory foundation
-  ctx.fillStyle = "#1e293b";
-  ctx.fillRect(-r, -r, r * 2, r * 2);
-  ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(-r, -r, r * 2, r * 2);
-
-  // Twin smokestacks at the rear
-  const stackW = r * 0.32;
-  const stackH = r * 0.55;
-  for (const sx of [-r * 0.6, r * 0.28]) {
-    // Pipe body
-    ctx.fillStyle = "#0f172a";
-    ctx.fillRect(sx, -r * 0.95, stackW, stackH);
-    ctx.strokeStyle = "#475569";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sx, -r * 0.95, stackW, stackH);
-
-    // Rim
-    ctx.fillStyle = "#ea580c";
-    ctx.fillRect(sx - 1, -r * 0.98, stackW + 2, 2.5);
-
-    // Animated smoke puffs drifting upwards
-    const puffOff = ((tick * 0.8 + (sx > 0 ? 5 : 0)) % 24);
-    const puffAlpha = Math.max(0, 0.6 - puffOff / 24);
-    ctx.fillStyle = `rgba(203, 213, 225, ${puffAlpha})`;
-    ctx.beginPath();
-    ctx.arc(sx + stackW / 2 + (puffOff * 0.2), -r * 0.98 - puffOff * 0.6, 2 + puffOff * 0.15, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Molten ore vat / smelting core
-  const vatY = -r * 0.1;
-  const vatW = r * 1.3;
-  const vatH = r * 0.55;
-  ctx.fillStyle = "#020617";
-  ctx.fillRect(-vatW / 2, vatY, vatW, vatH);
-
-  // Glowing molten gold interior
-  const heatPulse = 0.7 + Math.sin(tick * 0.2) * 0.3;
-  ctx.fillStyle = `rgba(234, 179, 8, ${heatPulse})`;
-  ctx.fillRect(-vatW / 2 + 2, vatY + 2, vatW - 4, vatH - 4);
-
-  // Slag grating bars over vat
-  ctx.fillStyle = "#451a03";
-  for (let i = -vatW / 2 + 4; i < vatW / 2 - 2; i += 3) {
-    ctx.fillRect(i, vatY + 1, 1, vatH - 2);
-  }
-
-  // Front ore intake hopper ramp
-  ctx.fillStyle = pal.primary;
-  ctx.beginPath();
-  ctx.moveTo(-r * 0.6, r * 0.5);
-  ctx.lineTo(r * 0.6, r * 0.5);
-  ctx.lineTo(r * 0.4, r * 0.95);
-  ctx.lineTo(-r * 0.4, r * 0.95);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = pal.primaryLight;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Team side panels
-  ctx.fillStyle = pal.primaryDark;
-  ctx.fillRect(-r * 0.95, -r * 0.2, r * 0.22, r * 0.8);
-  ctx.fillRect(r * 0.73, -r * 0.2, r * 0.22, r * 0.8);
-}
-
-/** Barracks: Fortified troop compound with chevron blast roof & double blast doors */
-function drawBarracks(
-  ctx: CanvasRenderingContext2D,
-  z: number,
-  pal: TeamPalette,
-  _tick: number,
-): void {
-  const r = z * 0.4;
-
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.fillRect(-r, -r + 2, r * 2, r * 2);
-
-  // Main compound body
-  ctx.fillStyle = "#1e293b";
-  ctx.fillRect(-r, -r, r * 2, r * 2);
-  ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(-r, -r, r * 2, r * 2);
-
-  // Sloped blast roof with team tactical chevrons
-  ctx.fillStyle = pal.primary;
-  ctx.beginPath();
-  ctx.moveTo(-r * 0.85, -r * 0.85);
-  ctx.lineTo(0, -r * 0.4);
-  ctx.lineTo(r * 0.85, -r * 0.85);
-  ctx.lineTo(r * 0.85, -r * 0.2);
-  ctx.lineTo(0, r * 0.25);
-  ctx.lineTo(-r * 0.85, -r * 0.2);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = pal.primaryLight;
-  ctx.beginPath();
-  ctx.moveTo(-r * 0.7, -r * 0.7);
-  ctx.lineTo(0, -r * 0.3);
-  ctx.lineTo(r * 0.7, -r * 0.7);
-  ctx.lineTo(r * 0.7, -r * 0.55);
-  ctx.lineTo(0, -r * 0.15);
-  ctx.lineTo(-r * 0.7, -r * 0.55);
-  ctx.closePath();
-  ctx.fill();
-
-  // Double hydraulic blast doors
-  const doorW = r * 0.7;
-  const doorH = r * 0.5;
-  const doorY = r * 0.4;
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(-doorW / 2, doorY, doorW, doorH);
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(-doorW / 2, doorY, doorW, doorH);
-
-  // Center door seam & warning lights
-  ctx.strokeStyle = "#64748b";
-  ctx.beginPath();
-  ctx.moveTo(0, doorY);
-  ctx.lineTo(0, doorY + doorH);
-  ctx.stroke();
-
-  // Status lights (green ready lights)
-  ctx.fillStyle = "#22c55e";
-  ctx.fillRect(-doorW / 2 + 1.5, doorY + 2, 2, 2);
-  ctx.fillRect(doorW / 2 - 3.5, doorY + 2, 2, 2);
-
-  // Ventilation grilles on the sides
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(-r * 0.88, r * 0.45, r * 0.18, r * 0.4);
-  ctx.fillRect(r * 0.7, r * 0.45, r * 0.18, r * 0.4);
-}
-
-/** Factory: Mechanized vehicle foundry with hazard-striped roll-up bay door & crane rails */
-function drawFactory(
-  ctx: CanvasRenderingContext2D,
-  z: number,
-  pal: TeamPalette,
-  _tick: number,
-): void {
-  const r = z * 0.4;
-
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.fillRect(-r, -r + 2, r * 2, r * 2);
-
-  // Heavy steel foundry body
-  ctx.fillStyle = "#1e242c";
-  ctx.fillRect(-r, -r, r * 2, r * 2);
-  ctx.strokeStyle = "#333d4b";
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(-r, -r, r * 2, r * 2);
-
-  // Overhead crane gantry across roof
-  ctx.fillStyle = "#334155";
-  ctx.fillRect(-r * 0.9, -r * 0.85, r * 1.8, r * 0.3);
-  ctx.strokeStyle = "#64748b";
-  ctx.lineWidth = 0.75;
-  ctx.strokeRect(-r * 0.9, -r * 0.85, r * 1.8, r * 0.3);
-
-  // Team identification bar
-  ctx.fillStyle = pal.primary;
-  ctx.fillRect(-r * 0.85, -r * 0.45, r * 1.7, r * 0.2);
-
-  // Large roll-up hangar door
-  const bayW = r * 1.35;
-  const bayH = r * 0.85;
-  const bayY = -r * 0.15;
-  ctx.fillStyle = "#090d16";
-  ctx.fillRect(-bayW / 2, bayY, bayW, bayH);
-
-  // Segmented roll-up horizontal slats
-  ctx.strokeStyle = "#1e293b";
-  ctx.lineWidth = 1;
-  for (let y = bayY + 3; y < bayY + bayH; y += 3.5) {
-    ctx.beginPath();
-    ctx.moveTo(-bayW / 2 + 1, y);
-    ctx.lineTo(bayW / 2 - 1, y);
-    ctx.stroke();
-  }
-
-  // Yellow/black diagonal hazard stripes on the door threshold
-  const stripeH = Math.max(2.5, r * 0.18);
-  const stripeY = bayY + bayH - stripeH;
-  ctx.fillStyle = "#eab308";
-  ctx.fillRect(-bayW / 2, stripeY, bayW, stripeH);
-
-  ctx.fillStyle = "#18181b";
-  ctx.beginPath();
-  for (let x = -bayW / 2; x < bayW / 2 + stripeH; x += stripeH * 1.2) {
-    ctx.moveTo(x, stripeY + stripeH);
-    ctx.lineTo(x + stripeH * 0.6, stripeY + stripeH);
-    ctx.lineTo(x + stripeH * 1.1, stripeY);
-    ctx.lineTo(x + stripeH * 0.5, stripeY);
-  }
-  ctx.closePath();
-  ctx.fill();
-
-  // Heavy hydraulic side stabilizer columns
-  ctx.fillStyle = "#475569";
-  ctx.fillRect(-r * 0.98, bayY, r * 0.15, bayH);
-  ctx.fillRect(r * 0.83, bayY, r * 0.15, bayH);
-}
-
-/** TechLab: Geodesic research dome with pulsing plasma core & satellite uplink */
-function drawTechLab(
-  ctx: CanvasRenderingContext2D,
-  z: number,
-  pal: TeamPalette,
-  tick: number,
-): void {
-  const r = z * 0.4;
-
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.beginPath();
-  ctx.arc(0, 2, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Hexagonal composite base plate
-  ctx.fillStyle = "#111827";
-  ctx.strokeStyle = "#374151";
-  ctx.lineWidth = 1.5;
-  drawRegularPolygon(ctx, 0, 0, r, 6);
-  ctx.fill();
-  ctx.stroke();
-
-  // Team energy conduit traces
-  ctx.strokeStyle = pal.primary;
-  ctx.lineWidth = 1.5;
-  for (let i = 0; i < 6; i++) {
-    const angle = (i * Math.PI) / 3;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(Math.cos(angle) * r * 0.85, Math.sin(angle) * r * 0.85);
-    ctx.stroke();
-  }
-
-  // Geodesic containment dome
-  const domeR = r * 0.6;
-  ctx.fillStyle = "#1e293b";
-  ctx.beginPath();
-  ctx.arc(0, 0, domeR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#64748b";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Pulsing plasma sphere
-  const pulse = 0.6 + Math.sin(tick * 0.2) * 0.4;
-  const plasmaGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, domeR * 0.7);
-  plasmaGrad.addColorStop(0, "#ffffff");
-  plasmaGrad.addColorStop(0.3, pal.accent);
-  plasmaGrad.addColorStop(0.7, pal.primary);
-  plasmaGrad.addColorStop(1, "rgba(30, 41, 59, 0)");
-  ctx.fillStyle = plasmaGrad;
-  ctx.beginPath();
-  ctx.arc(0, 0, domeR * (0.6 + pulse * 0.15), 0, Math.PI * 2);
-  ctx.fill();
-
-  // Orbiting containment ring / satellite sensor
-  const orbitAngle = tick * 0.08;
-  const ox = Math.cos(orbitAngle) * domeR * 0.85;
-  const oy = Math.sin(orbitAngle) * domeR * 0.85;
-  ctx.fillStyle = "#38bdf8";
-  ctx.beginPath();
-  ctx.arc(ox, oy, 2, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** Turret: Heavy point defense circular emplacement with twin auto-cannon barrels */
-function drawTurret(
-  ctx: CanvasRenderingContext2D,
-  z: number,
-  pal: TeamPalette,
-  _tick: number,
-): void {
-  const r = z * 0.38;
-
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
-  ctx.beginPath();
-  ctx.arc(0, 2, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Base armored ring with mounting bolts
-  ctx.fillStyle = "#1e242c";
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // 6 mounting bolts
-  ctx.fillStyle = "#64748b";
-  for (let i = 0; i < 6; i++) {
-    const angle = (i * Math.PI) / 3;
-    const bx = Math.cos(angle) * r * 0.78;
-    const by = Math.sin(angle) * r * 0.78;
-    ctx.fillRect(bx - 1, by - 1, 2, 2);
-  }
-
-  // Twin auto-cannon barrels pointing forward (default facing up/right)
-  const barrelLen = r * 1.1;
-  const barrelW = Math.max(1.5, r * 0.22);
-  const barrelSpacing = r * 0.28;
-
-  ctx.fillStyle = "#0f172a";
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 0.75;
-
-  // Left barrel
-  ctx.fillRect(-barrelSpacing - barrelW / 2, -barrelLen, barrelW, barrelLen);
-  ctx.strokeRect(-barrelSpacing - barrelW / 2, -barrelLen, barrelW, barrelLen);
-
-  // Right barrel
-  ctx.fillRect(barrelSpacing - barrelW / 2, -barrelLen, barrelW, barrelLen);
-  ctx.strokeRect(barrelSpacing - barrelW / 2, -barrelLen, barrelW, barrelLen);
-
-  // Muzzle flash arrestors / tips
-  ctx.fillStyle = "#334155";
-  ctx.fillRect(-barrelSpacing - barrelW / 2 - 0.5, -barrelLen, barrelW + 1, 2);
-  ctx.fillRect(barrelSpacing - barrelW / 2 - 0.5, -barrelLen, barrelW + 1, 2);
-
-  // Rotating center cupola
-  const cupolaR = r * 0.55;
-  ctx.fillStyle = pal.primary;
-  ctx.beginPath();
-  ctx.arc(0, 0, cupolaR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = pal.primaryLight;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Central viewport / laser sensor optic
-  ctx.fillStyle = "#ef4444";
-  ctx.fillRect(-1.5, -cupolaR * 0.6, 3, 2);
-}
-
-// ---------------------------------------------------------------------------
-// Unit Sprites
+// Unit Sprites (Command & Conquer Chunky Pixel-Art Military Hardware)
 // ---------------------------------------------------------------------------
 
 export function drawUnitSprite(
@@ -789,384 +273,1499 @@ export function drawUnitSprite(
   tick: number,
   isStale: boolean = false,
   carryingOre: number = 0,
+  firingAge: number = -1,
+  isMoving: boolean = false,
 ): void {
   const pal = getTeamPalette(owner, isStale);
 
   ctx.save();
-  ctx.translate(px, py);
+  ctx.translate(Math.floor(px), Math.floor(py));
   ctx.rotate(heading);
 
   switch (kind) {
     case "Infantry":
-      drawInfantry(ctx, zoom, pal, tick);
+      drawInfantry(ctx, zoom, pal, tick, firingAge, isMoving);
       break;
     case "Tank":
-      drawTank(ctx, zoom, pal, tick);
+      drawTank(ctx, zoom, pal, tick, firingAge);
       break;
     case "Artillery":
-      drawArtillery(ctx, zoom, pal, tick);
+      drawArtillery(ctx, zoom, pal, tick, firingAge);
       break;
     case "Harvester":
       drawHarvester(ctx, zoom, pal, tick, carryingOre);
       break;
     default:
-      ctx.fillStyle = pal.primary;
-      ctx.beginPath();
-      ctx.arc(0, 0, zoom * 0.25, 0, Math.PI * 2);
-      ctx.fill();
+      pRect(ctx, -4, -4, 8, 8, pal.primary);
   }
 
   ctx.restore();
 }
 
-/** Infantry: Armored cybernetic trooper with shoulder armor, helmet visor & rifle */
+/** Infantry: Chunky C&C pixel rifleman trooper (+X is forward) */
 function drawInfantry(
   ctx: CanvasRenderingContext2D,
   z: number,
   pal: TeamPalette,
-  _tick: number,
+  tick: number,
+  firingAge: number = -1,
+  isMoving: boolean = false,
 ): void {
-  const s = z * 0.32;
+  const s = Math.max(12, Math.floor(z * 0.35));
 
   // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
-  ctx.beginPath();
-  ctx.ellipse(0, 1, s * 0.7, s * 0.5, 0, 0, Math.PI * 2);
-  ctx.fill();
+  pRect(ctx, -s * 0.4, -s * 0.25 + 2, s * 0.8, s * 0.5, "rgba(0, 0, 0, 0.55)");
 
-  // Assault rifle barrel extending forward (+X is forward)
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(s * 0.2, s * 0.15, s * 0.95, Math.max(1.5, s * 0.22));
-  ctx.fillStyle = "#475569";
-  ctx.fillRect(s * 0.8, s * 0.12, s * 0.35, Math.max(1, s * 0.12));
+  // Walking leg stride animation ONLY when actively moving (+X is forward)
+  let leg1Off = 0;
+  let leg2Off = 0;
+  if (isMoving) {
+    const walkPhase = Math.sin(tick * 0.5) > 0;
+    leg1Off = walkPhase ? -s * 0.2 : s * 0.2;
+    leg2Off = -leg1Off;
+  }
 
-  // Armored torso / plate carrier
-  ctx.fillStyle = pal.primary;
-  ctx.beginPath();
-  drawRoundedRect(ctx, -s * 0.55, -s * 0.45, s * 0.9, s * 0.9, s * 0.2);
-  ctx.fill();
-  ctx.strokeStyle = pal.primaryDark;
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  // Combat boots (planted in idle ready stance, alternating when marching)
+  pRect(ctx, -s * 0.45 + leg1Off, -s * 0.35, s * 0.3, s * 0.2, "#09090b");
+  pRect(ctx, -s * 0.45 + leg2Off, s * 0.15, s * 0.3, s * 0.2, "#09090b");
 
-  // Shoulder pauldrons
-  ctx.fillStyle = pal.primaryLight;
-  ctx.fillRect(-s * 0.4, -s * 0.65, s * 0.45, s * 0.25);
-  ctx.fillRect(-s * 0.4, s * 0.4, s * 0.45, s * 0.25);
+  // Camo fatigue body / torso
+  pRect(ctx, -s * 0.35, -s * 0.3, s * 0.65, s * 0.6, "#27272a");
+  pRect(ctx, -s * 0.25, -s * 0.25, s * 0.45, s * 0.5, pal.primary);
 
-  // Armored helmet
-  const headR = s * 0.35;
-  ctx.fillStyle = "#1e293b";
-  ctx.beginPath();
-  ctx.arc(-s * 0.1, 0, headR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 0.75;
-  ctx.stroke();
+  // Assault rifle barrel extending forward
+  const kick = firingAge === 0 ? -2 : 0;
+  pRect(ctx, s * 0.15 + kick, s * 0.12, s * 0.75, Math.max(2, s * 0.18), "#09090b");
+  pRect(ctx, s * 0.65 + kick, s * 0.08, s * 0.25, Math.max(2, s * 0.12), "#52525b");
 
-  // Visor glowing slit facing forward (+X)
-  ctx.fillStyle = pal.accent;
-  ctx.fillRect(s * 0.1, -headR * 0.45, headR * 0.4, headR * 0.9);
+  // Muzzle flash for infantry
+  if (firingAge === 0 || firingAge === 1) {
+    const tipX = s * 0.9 + kick;
+    const tipY = s * 0.12;
+    pRect(ctx, tipX, tipY - 2, 4, 4, "#fef08a");
+    pRect(ctx, tipX + 1, tipY - 1, 2, 2, "#ffffff");
+  }
+
+  // Helmet / head
+  const headW = Math.max(6, Math.floor(s * 0.5));
+  pRect(ctx, -s * 0.25, -headW / 2, headW, headW, "#18181b");
+  pRect(ctx, -s * 0.15, -headW / 2 + 1, headW - 2, headW - 2, pal.primaryDark);
+
+  // Team helmet band & tactical visor (+X is forward)
+  pRect(ctx, s * 0.05, -headW * 0.3, 2, headW * 0.6, pal.accent);
 }
 
-/** Tank: Heavy battle tank with dual track treads, sloped armor & rotating cannon turret */
+/** Tank: Heavy C&C battle tank with dual treads & rotating turret (+X is forward) */
 function drawTank(
   ctx: CanvasRenderingContext2D,
   z: number,
   pal: TeamPalette,
   _tick: number,
+  firingAge: number = -1,
 ): void {
-  const s = z * 0.38;
+  const s = Math.max(14, Math.floor(z * 0.4));
 
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.fillRect(-s * 0.9, -s * 0.7 + 2, s * 1.8, s * 1.4);
-
-  // Left & right track treads (+X is forward)
-  const treadW = s * 1.7;
-  const treadH = s * 0.35;
-  const treadY = s * 0.5;
-
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(-treadW / 2, -treadY - treadH / 2, treadW, treadH);
-  ctx.fillRect(-treadW / 2, treadY - treadH / 2, treadW, treadH);
-
-  // Tread links / sprockets
-  ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 1;
-  for (let x = -treadW / 2 + 2; x < treadW / 2; x += 3.5) {
-    ctx.beginPath();
-    ctx.moveTo(x, -treadY - treadH / 2);
-    ctx.lineTo(x, -treadY + treadH / 2);
-    ctx.moveTo(x, treadY - treadH / 2);
-    ctx.lineTo(x, treadY + treadH / 2);
-    ctx.stroke();
+  // Recoil calculation: 0 = peak fire, 1 = heavy recoil, 2 = recovery, 3 = settling
+  let recoil = 0;
+  let hullKick = 0;
+  if (firingAge >= 0 && firingAge <= 4) {
+    if (firingAge === 0) { recoil = s * 0.34; hullKick = -s * 0.08; }
+    else if (firingAge === 1) { recoil = s * 0.26; hullKick = -s * 0.05; }
+    else if (firingAge === 2) { recoil = s * 0.16; hullKick = -s * 0.02; }
+    else if (firingAge === 3) { recoil = s * 0.07; hullKick = 0; }
   }
 
-  // Sloped armored hull chassis
-  const hullW = s * 1.35;
-  const hullH = s * 0.85;
-  ctx.fillStyle = "#1e293b";
-  ctx.beginPath();
-  drawRoundedRect(ctx, -hullW / 2, -hullH / 2, hullW, hullH, s * 0.15);
-  ctx.fill();
-  ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  // Drop shadow
+  pRect(ctx, -s * 0.85 + hullKick, -s * 0.65 + 2, s * 1.7, s * 1.3, "rgba(0, 0, 0, 0.55)");
 
-  // Team colored hull deck plate
-  ctx.fillStyle = pal.primary;
-  ctx.fillRect(-hullW * 0.35, -hullH * 0.4, hullW * 0.7, hullH * 0.8);
+  // Dual caterpillar treads (+X is forward)
+  const tw = Math.floor(s * 1.6);
+  const th = Math.max(3, Math.floor(s * 0.32));
+  const ty = Math.floor(s * 0.48);
 
-  // Engine exhaust grilles at the rear (-X)
-  ctx.fillStyle = "#020617";
-  ctx.fillRect(-hullW / 2 + 2, -hullH * 0.3, 3, hullH * 0.6);
+  // Left & Right treads (hard pixel outline + links)
+  pRect(ctx, -tw / 2 + hullKick, -ty - th / 2, tw, th, "#09090b");
+  pRect(ctx, -tw / 2 + hullKick, ty - th / 2, tw, th, "#09090b");
+  for (let x = -tw / 2 + 2; x < tw / 2 - 1; x += 3) {
+    pRect(ctx, x + hullKick, -ty - th / 2 + 1, 1.5, th - 2, "#3f3f46");
+    pRect(ctx, x + hullKick, ty - th / 2 + 1, 1.5, th - 2, "#3f3f46");
+  }
 
-  // Main cannon barrel extending forward (+X)
-  const barrelLen = s * 1.25;
-  const barrelW = Math.max(1.5, s * 0.22);
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 0.75;
-  ctx.strokeRect(0, -barrelW / 2, barrelLen, barrelW);
+  // Armored chassis hull
+  const hw = Math.floor(s * 1.3);
+  const hh = Math.floor(s * 0.75);
+  pRect(ctx, -hw / 2 + hullKick, -hh / 2, hw, hh, "#18181b");
+  pRect(ctx, -hw / 2 + 1 + hullKick, -hh / 2 + 1, hw - 2, hh - 2, "#27272a");
 
-  // Muzzle brake & bore evacuator
-  ctx.fillStyle = "#334155";
-  ctx.fillRect(barrelLen * 0.5, -barrelW * 0.7, barrelW * 1.2, barrelW * 1.4);
-  ctx.fillRect(barrelLen - 2, -barrelW * 0.8, 3, barrelW * 1.6);
+  // Team identification deck plate
+  pRect(ctx, -hw * 0.35 + hullKick, -hh * 0.35, hw * 0.7, hh * 0.7, pal.primary);
+  pRect(ctx, -hw * 0.3 + hullKick, -hh * 0.3, hw * 0.6, hh * 0.6, pal.primaryDark);
 
-  // Armored turret cupola
-  const turretR = s * 0.45;
-  ctx.fillStyle = pal.primaryDark;
-  ctx.beginPath();
-  ctx.arc(0, 0, turretR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = pal.primaryLight;
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  // Rear exhaust grilles (-X)
+  pRect(ctx, -hw / 2 + 2 + hullKick, -hh * 0.3, 2, hh * 0.6, "#09090b");
 
-  // Commander hatch
-  ctx.fillStyle = "#0f172a";
-  ctx.beginPath();
-  ctx.arc(-turretR * 0.2, 0, turretR * 0.35, 0, Math.PI * 2);
-  ctx.fill();
+  // Main cannon barrel extending forward (+X) with dynamic recoil offset
+  const blen = Math.floor(s * 1.25);
+  const bw = Math.max(2, Math.floor(s * 0.2));
+  const barrelStart = -recoil;
+  const barrelEnd = blen - recoil;
+  pRect(ctx, barrelStart, -bw / 2, blen, bw, "#09090b");
+  pRect(ctx, barrelStart + 1, -bw / 2 + 0.5, blen - 2, bw - 1, "#3f3f46");
+
+  // Muzzle brake on cannon tip
+  const brakeColor = firingAge >= 0 && firingAge <= 2 ? "#d97706" : "#18181b";
+  pRect(ctx, barrelEnd - 3, -bw / 2 - 1, 3, bw + 2, brakeColor);
+
+  // Armored box turret
+  const tr = Math.floor(s * 0.45);
+  pRect(ctx, -tr + hullKick * 0.5, -tr, tr * 2, tr * 2, "#09090b");
+  pRect(ctx, -tr + 1 + hullKick * 0.5, -tr + 1, tr * 2 - 2, tr * 2 - 2, pal.primary);
+
+  // Commander cupola hatch
+  pRect(ctx, -tr * 0.3 + hullKick * 0.5, -tr * 0.3, tr * 0.7, tr * 0.7, "#18181b");
+
+  // Muzzle blast explosive firing animation
+  if (firingAge >= 0 && firingAge <= 2) {
+    const tipX = barrelEnd;
+    if (firingAge <= 1) {
+      // Big explosive muzzle flash burst (star)
+      const flashSize = Math.floor(s * 0.65);
+      pRect(ctx, tipX, -flashSize * 0.4, flashSize * 1.1, flashSize * 0.8, "#f97316"); // Outer orange fire
+      pRect(ctx, tipX + 1, -flashSize * 0.25, flashSize * 0.8, flashSize * 0.5, "#fef08a"); // Bright yellow core
+      pRect(ctx, tipX + 2, -flashSize * 0.12, flashSize * 0.5, flashSize * 0.24, "#ffffff"); // Pure white center
+
+      // Side muzzle vent flame jets
+      pRect(ctx, tipX - 2, -bw / 2 - flashSize * 0.35, 3, flashSize * 0.35, "#fbbf24");
+      pRect(ctx, tipX - 2, bw / 2 + 1, 3, flashSize * 0.35, "#fbbf24");
+
+      // Muzzle smoke cloud
+      pRect(ctx, tipX + flashSize * 0.9, -flashSize * 0.3, flashSize * 0.5, flashSize * 0.6, "#71717a");
+    } else if (firingAge === 2) {
+      // Dissipating smoke puff
+      const smokeSize = Math.floor(s * 0.45);
+      pRect(ctx, tipX + 4, -smokeSize * 0.4, smokeSize, smokeSize * 0.8, "#52525b");
+      pRect(ctx, tipX + 8, -smokeSize * 0.2, smokeSize * 0.6, smokeSize * 0.4, "#71717a");
+    }
+  }
 }
 
-/** Artillery: Heavy crawler with outrigger stabilizers & extended railgun/howitzer barrel */
+/** Artillery: Heavy self-propelled siege howitzer crawler (+X is forward) */
 function drawArtillery(
   ctx: CanvasRenderingContext2D,
   z: number,
   pal: TeamPalette,
   _tick: number,
+  firingAge: number = -1,
 ): void {
-  const s = z * 0.4;
+  const s = Math.max(16, Math.floor(z * 0.42));
 
-  // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.fillRect(-s * 0.9, -s * 0.8 + 2, s * 1.8, s * 1.6);
-
-  // Outrigger wide crawler tracks
-  const trackW = s * 1.6;
-  const trackH = s * 0.4;
-  const trackY = s * 0.65;
-
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(-trackW / 2, -trackY - trackH / 2, trackW, trackH);
-  ctx.fillRect(-trackW / 2, trackY - trackH / 2, trackW, trackH);
-
-  // Stabilizer arm struts
-  ctx.fillStyle = "#334155";
-  ctx.fillRect(-s * 0.6, -trackY + trackH / 2, s * 1.2, trackY * 2 - trackH);
-
-  // Main chassis
-  const bodyW = s * 1.1;
-  const bodyH = s * 0.85;
-  ctx.fillStyle = "#1e293b";
-  ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(-bodyW / 2, -bodyH / 2, bodyW, bodyH);
-
-  // Team rear armored plate
-  ctx.fillStyle = pal.primary;
-  ctx.fillRect(-bodyW / 2, -bodyH / 2, bodyW * 0.45, bodyH);
-
-  // Long-range siege railgun / heavy howitzer cannon (+X is forward)
-  const barrelLen = s * 1.7;
-  const barrelW = Math.max(2, s * 0.28);
-
-  // Recoil compensation housing
-  ctx.fillStyle = "#0f172a";
-  ctx.fillRect(-s * 0.2, -barrelW * 0.8, s * 0.7, barrelW * 1.6);
-
-  // Heavy cannon barrel
-  ctx.fillStyle = "#020617";
-  ctx.fillRect(0, -barrelW / 2, barrelLen, barrelW);
-  ctx.strokeStyle = "#64748b";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0, -barrelW / 2, barrelLen, barrelW);
-
-  // Railgun energy coil bands along barrel
-  ctx.fillStyle = pal.accent;
-  for (let x = s * 0.5; x < barrelLen - 4; x += s * 0.35) {
-    ctx.fillRect(x, -barrelW * 0.7, 2.5, barrelW * 1.4);
+  // Recoil calculation
+  let recoil = 0;
+  if (firingAge >= 0 && firingAge <= 5) {
+    if (firingAge === 0) recoil = s * 0.45;
+    else if (firingAge === 1) recoil = s * 0.38;
+    else if (firingAge === 2) recoil = s * 0.26;
+    else if (firingAge === 3) recoil = s * 0.15;
+    else if (firingAge === 4) recoil = s * 0.07;
   }
 
-  // Heavy muzzle brake
-  ctx.fillStyle = "#475569";
-  ctx.fillRect(barrelLen - 3, -barrelW * 0.9, 4, barrelW * 1.8);
+  // Drop shadow
+  pRect(ctx, -s * 0.85, -s * 0.75 + 2, s * 1.7, s * 1.5, "rgba(0, 0, 0, 0.55)");
+
+  // Outrigger tracked treads
+  const tw = Math.floor(s * 1.55);
+  const th = Math.max(3.5, Math.floor(s * 0.35));
+  const ty = Math.floor(s * 0.58);
+
+  pRect(ctx, -tw / 2, -ty - th / 2, tw, th, "#09090b");
+  pRect(ctx, -tw / 2, ty - th / 2, tw, th, "#09090b");
+  for (let x = -tw / 2 + 2; x < tw / 2 - 1; x += 3.5) {
+    pRect(ctx, x, -ty - th / 2 + 1, 1.5, th - 2, "#3f3f46");
+    pRect(ctx, x, ty - th / 2 + 1, 1.5, th - 2, "#3f3f46");
+  }
+
+  // Stabilizer arm crossbeams
+  pRect(ctx, -s * 0.45, -ty + th / 2, s * 0.9, ty * 2 - th, "#27272a");
+
+  // Heavy armored chassis
+  const bw = Math.floor(s * 1.15);
+  const bh = Math.floor(s * 0.8);
+  pRect(ctx, -bw / 2, -bh / 2, bw, bh, "#18181b");
+  pRect(ctx, -bw / 2 + 1, -bh / 2 + 1, bw - 2, bh - 2, pal.primaryDark);
+  pRect(ctx, -bw * 0.45, -bh * 0.35, bw * 0.4, bh * 0.7, pal.primary);
+
+  // Massive elevated siege railgun barrel (+X is forward)
+  const blen = Math.floor(s * 1.75);
+  const barrelW = Math.max(3, Math.floor(s * 0.28));
+
+  // Recoil housing
+  pRect(ctx, -s * 0.2, -barrelW * 0.8, s * 0.7, barrelW * 1.6, "#09090b");
+  pRect(ctx, -s * 0.15, -barrelW * 0.6, s * 0.6, barrelW * 1.2, "#27272a");
+
+  // Long gun barrel with reinforced sleeve & recoil offset
+  const bStart = -recoil;
+  const bEnd = blen - recoil;
+  pRect(ctx, bStart, -barrelW / 2, blen, barrelW, "#09090b");
+  pRect(ctx, bStart + 1, -barrelW / 2 + 0.5, blen - 2, barrelW - 1, "#3f3f46");
+  pRect(ctx, bStart + blen * 0.4, -barrelW / 2 - 1, s * 0.35, barrelW + 2, "#18181b");
+
+  // Massive siege muzzle blast
+  if (firingAge >= 0 && firingAge <= 2) {
+    const tipX = bEnd;
+    const blastSize = Math.floor(s * 0.85);
+    pRect(ctx, tipX, -blastSize * 0.5, blastSize * 1.3, blastSize, "#f97316");
+    pRect(ctx, tipX + 2, -blastSize * 0.3, blastSize * 0.9, blastSize * 0.6, "#fef08a");
+    pRect(ctx, tipX + 4, -blastSize * 0.15, blastSize * 0.5, blastSize * 0.3, "#ffffff");
+  }
 }
 
-/** Harvester: Heavy 6-wheel rover with front drill/collector & rear ore cargo bed */
+/** Harvester: Heavy industrial mining rig with scoop jaws & ore bin (+X is forward) */
 function drawHarvester(
   ctx: CanvasRenderingContext2D,
   z: number,
   pal: TeamPalette,
   tick: number,
-  carryingOre: number,
+  _carryingOre: number = 0,
 ): void {
-  const s = z * 0.36;
+  const s = Math.max(16, Math.floor(z * 0.44));
 
   // Drop shadow
-  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
-  ctx.fillRect(-s * 0.9, -s * 0.7 + 2, s * 1.8, s * 1.4);
+  pRect(ctx, -s * 0.9, -s * 0.75 + 2, s * 1.8, s * 1.5, "rgba(0, 0, 0, 0.55)");
 
-  // 6 heavy all-terrain wheels (+X is forward)
-  const wheelW = s * 0.42;
-  const wheelH = s * 0.28;
-  const wheelY = s * 0.55;
+  // Massive heavy mining treads
+  const tw = Math.floor(s * 1.7);
+  const th = Math.max(4, Math.floor(s * 0.38));
+  const ty = Math.floor(s * 0.55);
 
-  ctx.fillStyle = "#0f172a";
-  for (const x of [-s * 0.6, 0, s * 0.6]) {
-    ctx.fillRect(x - wheelW / 2, -wheelY - wheelH / 2, wheelW, wheelH);
-    ctx.fillRect(x - wheelW / 2, wheelY - wheelH / 2, wheelW, wheelH);
-    // Rim hubs
-    ctx.fillStyle = "#475569";
-    ctx.fillRect(x - 1, -wheelY - 1, 2, 2);
-    ctx.fillRect(x - 1, wheelY - 1, 2, 2);
-    ctx.fillStyle = "#0f172a";
+  pRect(ctx, -tw / 2, -ty - th / 2, tw, th, "#09090b");
+  pRect(ctx, -tw / 2, ty - th / 2, tw, th, "#09090b");
+  for (let x = -tw / 2 + 2; x < tw / 2 - 1; x += 3.5) {
+    pRect(ctx, x, -ty - th / 2 + 1, 2, th - 2, "#52525b");
+    pRect(ctx, x, ty - th / 2 + 1, 2, th - 2, "#52525b");
   }
 
-  // Heavy rover chassis
-  const chassisW = s * 1.4;
-  const chassisH = s * 0.85;
-  ctx.fillStyle = "#1e293b";
-  ctx.fillRect(-chassisW / 2, -chassisH / 2, chassisW, chassisH);
-  ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(-chassisW / 2, -chassisH / 2, chassisW, chassisH);
+  // Armored industrial chassis
+  const bw = Math.floor(s * 1.4);
+  const bh = Math.floor(s * 0.85);
+  pRect(ctx, -bw / 2, -bh / 2, bw, bh, "#18181b");
+  pRect(ctx, -bw / 2 + 1, -bh / 2 + 1, bw - 2, bh - 2, "#27272a");
 
-  // Rear cargo bed (-X)
-  const bedW = chassisW * 0.55;
-  const bedH = chassisH * 0.8;
-  const bedX = -chassisW / 2 + 2;
-  const bedY = -bedH / 2;
+  // Front rotating mining drill scoop jaws (+X is forward)
+  const jawPhase = Math.sin(tick * 0.3) > 0 ? 1 : -1;
+  pRect(ctx, bw / 2 - 2, -bh * 0.45, s * 0.35, 3, "#ca8a04");
+  pRect(ctx, bw / 2 - 2, bh * 0.45 - 3, s * 0.35, 3, "#ca8a04");
+  pRect(ctx, bw / 2 + 1, -bh * 0.3 + jawPhase * 1.5, s * 0.25, bh * 0.6, "#713f12");
 
-  ctx.fillStyle = "#090d16";
-  ctx.fillRect(bedX, bedY, bedW, bedH);
-  ctx.strokeStyle = "#475569";
-  ctx.lineWidth = 0.75;
-  ctx.strokeRect(bedX, bedY, bedW, bedH);
+  // Rear ore bin hopper (-X)
+  const binW = Math.floor(bw * 0.65);
+  const binH = Math.floor(bh * 0.8);
+  pRect(ctx, -bw / 2 + 2, -binH / 2, binW, binH, "#09090b");
+  pRect(ctx, -bw / 2 + 3, -binH / 2 + 1, binW - 2, binH - 2, pal.primary);
 
-  // If carrying ore: show glowing gold crystals inside cargo bed!
-  if (carryingOre > 0) {
-    ctx.fillStyle = "#eab308";
-    const oreCount = Math.min(6, Math.max(2, Math.floor(carryingOre / 8)));
-    for (let i = 0; i < oreCount; i++) {
-      const ox = bedX + 2 + (i % 3) * (bedW / 3.2);
-      const oy = bedY + 2 + Math.floor(i / 3) * (bedH / 2.2);
-      ctx.fillRect(ox, oy, bedW / 4, bedH / 3);
-    }
-    // Specular highlight on ore load
-    ctx.fillStyle = "#fef08a";
-    ctx.fillRect(bedX + 3, bedY + 3, 2, 2);
-  }
+  // Sparkling ore cargo inside bin
+  pRect(ctx, -bw / 2 + 5, -binH * 0.3, binW * 0.6, binH * 0.6, "#eab308");
+  pRect(ctx, -bw / 2 + 7, -binH * 0.15, binW * 0.3, binH * 0.3, "#fef08a");
 
-  // Front operator cabin (+X)
-  const cabW = chassisW * 0.35;
-  const cabH = chassisH * 0.75;
-  const cabX = chassisW / 2 - cabW - 2;
-  const cabY = -cabH / 2;
-
-  ctx.fillStyle = pal.primary;
-  ctx.fillRect(cabX, cabY, cabW, cabH);
-  ctx.strokeStyle = pal.primaryDark;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(cabX, cabY, cabW, cabH);
-
-  // Protective cockpit windshield
-  ctx.fillStyle = "#38bdf8";
-  ctx.fillRect(cabX + cabW * 0.4, cabY + 2, cabW * 0.5, cabH - 4);
-
-  // Front articulating mining drill / laser intake arms extending forward
-  const armLen = s * 0.55;
-  const drillSpin = tick * 0.3;
-  ctx.fillStyle = "#475569";
-  ctx.fillRect(chassisW / 2 - 1, -s * 0.35, armLen, s * 0.18);
-  ctx.fillRect(chassisW / 2 - 1, s * 0.17, armLen, s * 0.18);
-
-  // Rotary cutting drill head
-  ctx.fillStyle = "#e2e8f0";
-  ctx.beginPath();
-  ctx.arc(chassisW / 2 + armLen, -s * 0.26 + Math.sin(drillSpin) * 1, 2.5, 0, Math.PI * 2);
-  ctx.arc(chassisW / 2 + armLen, s * 0.26 - Math.sin(drillSpin) * 1, 2.5, 0, Math.PI * 2);
-  ctx.fill();
+  // Armored forward driver cab
+  pRect(ctx, binW * 0.35, -bh * 0.35, bw * 0.3, bh * 0.7, "#18181b");
+  pRect(ctx, binW * 0.45, -bh * 0.25, bw * 0.2, bh * 0.5, pal.accent);
 }
 
 // ---------------------------------------------------------------------------
-// FX & HUD Elements
+// 2.5D Isometric Building Sprites (Command & Conquer Tier Industrial Architecture)
 // ---------------------------------------------------------------------------
 
-/** Sci-fi 4-corner targeting bracket reticle */
+export function drawBuildingSprite(
+  ctx: CanvasRenderingContext2D,
+  kind: string,
+  px: number,
+  py: number,
+  zoom: number,
+  owner: number,
+  heading: number = 0,
+  tick: number = 0,
+  isStale: boolean = false,
+  progress: number = 0,
+  buildTime: number = 0,
+  firingAge: number = -1,
+): void {
+  const pal = getTeamPalette(owner, isStale);
+
+  ctx.save();
+  ctx.translate(Math.floor(px), Math.floor(py));
+
+  switch (kind) {
+    case "Hq":
+      drawHq(ctx, zoom, pal, tick);
+      break;
+    case "PowerPlant":
+      drawPowerPlant(ctx, zoom, pal, tick);
+      break;
+    case "Refinery":
+      drawRefinery(ctx, zoom, pal, tick);
+      break;
+    case "Barracks":
+      drawBarracks(ctx, zoom, pal, tick);
+      break;
+    case "Factory":
+      drawFactory(ctx, zoom, pal, tick);
+      break;
+    case "TechLab":
+      drawTechLab(ctx, zoom, pal, tick);
+      break;
+    case "Airfield":
+      drawAirfield(ctx, zoom, pal, tick);
+      break;
+    case "Turret":
+      drawTurret(ctx, zoom, pal, heading, tick, firingAge);
+      break;
+    default:
+      pRect(ctx, -zoom * 0.4, -zoom * 0.4, zoom * 0.8, zoom * 0.8, pal.primary);
+  }
+
+  // Production progress bar for producing structures
+  if (buildTime > 0 && progress > 0) {
+    const barW = Math.floor(zoom * 0.85);
+    const barH = 4;
+    const barY = Math.floor(zoom * 0.48);
+    pRect(ctx, -barW / 2 - 1, barY - 1, barW + 2, barH + 2, "#09090b");
+    pRect(ctx, -barW / 2, barY, barW, barH, "#1c1917");
+    const fillW = Math.floor(barW * Math.min(1, progress / buildTime));
+    pRect(ctx, -barW / 2, barY, fillW, barH, "#f59e0b");
+    pRect(ctx, -barW / 2, barY, fillW, 1, "#fde047");
+  }
+
+  ctx.restore();
+}
+
+/** HQ / Construction Yard: Fortified 2.5D concrete command fortress with rotating radar array */
+function drawHq(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(18, Math.floor(z * 0.55));
+
+  // 1. Soft directional ground shadow (South-East projection)
+  pRect(ctx, -r + 5, -r + 7, r * 2 + 5, r * 2 + 3, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Fortified hexagonal concrete foundation slab with 3D bevels
+  pRect(ctx, -r, -r, r * 2, r * 2, "#0a0f1d");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#1e293b");
+
+  // Top/Left 3D concrete highlight (North-West light)
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, 2, "#475569");
+  pRect(ctx, -r + 1, -r + 1, 2, r * 2 - 2, "#475569");
+  pRect(ctx, -r + 2, -r + 2, r * 2 - 4, 1, "#64748b");
+  // Bottom/Right 3D concrete shadow
+  pRect(ctx, -r + 1, r - 3, r * 2 - 2, 2, "#090d16");
+  pRect(ctx, r - 3, -r + 1, 2, r * 2 - 2, "#090d16");
+
+  // 3. Four reinforced corner blast defense turrets / pillars
+  const pillarW = Math.floor(r * 0.38);
+  const corners = [
+    [-r + 2, -r + 2],
+    [r - pillarW - 2, -r + 2],
+    [-r + 2, r - pillarW - 2],
+    [r - pillarW - 2, r - pillarW - 2],
+  ];
+  for (const [cx, cy] of corners) {
+    pRect(ctx, cx, cy, pillarW, pillarW, "#090d16");
+    pRect(ctx, cx + 1, cy + 1, pillarW - 2, pillarW - 2, "#334155");
+    pRect(ctx, cx + 1, cy + 1, pillarW - 2, 1, "#64748b");
+    pRect(ctx, cx + 1, cy + 1, 1, pillarW - 2, "#64748b");
+    // Gun slit
+    pRect(ctx, cx + pillarW / 2 - 1, cy + pillarW / 2 - 1, 2, 2, "#09090b");
+  }
+
+  // 4. Left Module: Power & Generator Bank
+  const genW = Math.floor(r * 0.55);
+  const genH = Math.floor(r * 0.7);
+  pRect(ctx, -r * 0.9, -r * 0.35, genW, genH, "#090d16");
+  pRect(ctx, -r * 0.9 + 1, -r * 0.35 + 1, genW - 2, genH - 2, "#273549");
+  // Dual ventilation fans
+  pRect(ctx, -r * 0.8, -r * 0.25, genW - 4, 3, "#090d16");
+  pRect(ctx, -r * 0.8, -r * 0.05, genW - 4, 3, "#090d16");
+
+  // 5. Right Module: Telemetry & Comms Array
+  const comW = Math.floor(r * 0.55);
+  const comH = Math.floor(r * 0.7);
+  pRect(ctx, r * 0.35, -r * 0.35, comW, comH, "#090d16");
+  pRect(ctx, r * 0.35 + 1, -r * 0.35 + 1, comW - 2, comH - 2, pal.primaryDark);
+  // Status telemetry lights
+  pRect(ctx, r * 0.45, -r * 0.25, 2, 2, "#22c55e");
+  pRect(ctx, r * 0.45, -r * 0.1, 2, 2, "#38bdf8");
+  pRect(ctx, r * 0.45, r * 0.05, 2, 2, "#facc15");
+
+  // 6. Central Elevated Command Citadel Fortress (2.5D Raised Roof)
+  const citW = Math.floor(r * 1.25);
+  const citH = Math.floor(r * 1.15);
+  pRect(ctx, -citW / 2, -citH / 2 - 2, citW, citH, "#090d16");
+  pRect(ctx, -citW / 2 + 1, -citH / 2 - 1, citW - 2, citH - 2, pal.primaryDark);
+  pRect(ctx, -citW / 2 + 2, -citH / 2, citW - 4, citH - 4, pal.primary);
+
+  // Roof armor plate seams & top highlight
+  pRect(ctx, -citW / 2 + 2, -citH / 2, citW - 4, 1, pal.primaryLight);
+  pRect(ctx, -citW / 2 + 2, -citH / 2, 1, citH - 4, pal.primaryLight);
+
+  // 7. Tactical Command Observation Dome (Cyan glass vision slit)
+  const domeW = Math.floor(citW * 0.65);
+  pRect(ctx, -domeW / 2, -citH * 0.35, domeW, 5, "#090d16");
+  pRect(ctx, -domeW / 2 + 1, -citH * 0.35 + 1, domeW - 2, 3, "#38bdf8");
+  pRect(ctx, -domeW / 2 + 2, -citH * 0.35 + 1, domeW - 4, 1, "#e0f2fe"); // Specular glint
+
+  // 8. Rotating Parabolic Radar Dish Array
+  const radarPhase = Math.floor((tick * 0.12) % 8);
+  const radarAngles = [
+    [-5, -r * 0.65, 5, -r * 0.65],
+    [-4, -r * 0.7, 4, -r * 0.6],
+    [-2, -r * 0.75, 2, -r * 0.55],
+    [2, -r * 0.75, -2, -r * 0.55],
+    [5, -r * 0.65, -5, -r * 0.65],
+    [4, -r * 0.6, -4, -r * 0.7],
+    [2, -r * 0.55, -2, -r * 0.75],
+    [-2, -r * 0.55, 2, -r * 0.75],
+  ];
+  const [rx1, ry1, rx2, ry2] = radarAngles[radarPhase];
+
+  // Steel lattice pedestal
+  pRect(ctx, -3, -r * 0.7, 6, 7, "#090d16");
+  pRect(ctx, -2, -r * 0.7 + 1, 4, 5, "#475569");
+  // Radar dish line
+  ctx.strokeStyle = "#fef08a";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(rx1, ry1);
+  ctx.lineTo(rx2, ry2);
+  ctx.stroke();
+
+  // Radar transmitter feedhorn spark
+  pRect(ctx, (rx1 + rx2) / 2 - 1, (ry1 + ry2) / 2 - 1, 2, 2, "#ffffff");
+
+  // Telemetry spire & flashing red beacon
+  pRect(ctx, r * 0.7, -r * 1.15, 2, r * 0.45, "#64748b");
+  const beaconOn = Math.sin(tick * 0.3) > 0;
+  pRect(ctx, r * 0.7 - 1, -r * 1.2, 4, 3, beaconOn ? "#ef4444" : "#7f1d1d");
+
+  // 9. Reinforced Underground Blast Hangar Gate with hazard sill
+  const gateW = Math.floor(r * 0.9);
+  const gateH = Math.floor(r * 0.45);
+  pRect(ctx, -gateW / 2, r * 0.35, gateW, gateH, "#090d16");
+  pRect(ctx, -gateW / 2 + 1, r * 0.35 + 1, gateW - 2, gateH - 2, "#1e293b");
+
+  // Vertical gate rib seams
+  for (let gx = -gateW / 2 + 3; gx < gateW / 2 - 2; gx += 4) {
+    pRect(ctx, gx, r * 0.35 + 1, 1.5, gateH - 2, "#090d16");
+  }
+  pHazard(ctx, -gateW / 2 + 1, r * 0.74, gateW - 2, 3);
+}
+
+/** Power Plant / Generator: Heavy industrial fusion dynamo complex with twin cooling towers & plasma reactor core */
+function drawPowerPlant(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(16, Math.floor(z * 0.50));
+
+  // 1. Soft directional ground shadow (South-East projection)
+  pRect(ctx, -r + 4, -r + 6, r * 2 + 4, r * 2 + 2, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Heavy industrial concrete foundation slab with steel reinforcing
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#181f2a");
+
+  // Hazard striped warning border on foundation edges
+  pHazard(ctx, -r + 2, r - 5, r * 2 - 4, 3);
+
+  // 3. Twin Heavy Cooling Turbines / Hyperbolic Towers (West and East)
+  const towerR = Math.floor(r * 0.38);
+  const towerH = Math.floor(r * 0.95);
+  const towerY = -r * 0.85;
+
+  // Left Cooling Tower
+  pRect(ctx, -r * 0.85, towerY, towerR * 2, towerH, "#0f172a");
+  pRect(ctx, -r * 0.85 + 1, towerY + 1, towerR * 2 - 2, towerH - 2, "#334155");
+  pRect(ctx, -r * 0.85 + 2, towerY + 2, towerR * 2 - 4, 3, "#090d16"); // Chimney lip
+  pRect(ctx, -r * 0.85 + 3, towerY + 3, towerR * 2 - 6, 2, "#0284c7"); // Internal glow
+
+  // Right Cooling Tower
+  pRect(ctx, r * 0.85 - towerR * 2, towerY, towerR * 2, towerH, "#0f172a");
+  pRect(ctx, r * 0.85 - towerR * 2 + 1, towerY + 1, towerR * 2 - 2, towerH - 2, "#334155");
+  pRect(ctx, r * 0.85 - towerR * 2 + 2, towerY + 2, towerR * 2 - 4, 3, "#090d16");
+  pRect(ctx, r * 0.85 - towerR * 2 + 3, towerY + 3, towerR * 2 - 6, 2, "#0284c7");
+
+  // Animated steam vapor puffs from cooling chimneys
+  const puff1 = Math.floor((tick * 0.2) % 3);
+  const puff2 = Math.floor((tick * 0.2 + 1.5) % 3);
+  pRect(ctx, -r * 0.85 + 2 + puff1, towerY - puff1 * 2 - 3, towerR * 2 - 4, 3 + puff1, "#94a3b8");
+  pRect(ctx, r * 0.85 - towerR * 2 + 2 + puff2, towerY - puff2 * 2 - 3, towerR * 2 - 4, 3 + puff2, "#94a3b8");
+
+  // 4. Central High-Energy Plasma Fusion Reactor Core
+  const coreW = Math.floor(r * 0.85);
+  const coreH = Math.floor(r * 0.75);
+  const coreY = -r * 0.25;
+
+  pRect(ctx, -coreW / 2, coreY, coreW, coreH, "#090d16");
+  pRect(ctx, -coreW / 2 + 1, coreY + 1, coreW - 2, coreH - 2, pal.primaryDark);
+  pRect(ctx, -coreW / 2 + 2, coreY + 2, coreW - 4, coreH - 4, pal.primary);
+
+  // Glowing energetic plasma core window (pulsing brightness)
+  const pulse = Math.sin(tick * 0.35) * 0.5 + 0.5;
+  const plasmaCoreColor = pulse > 0.5 ? "#38bdf8" : "#0284c7";
+  const plasmaHighlight = pulse > 0.5 ? "#ffffff" : "#bae6fd";
+  pRect(ctx, -coreW * 0.28, coreY + coreH * 0.2, coreW * 0.56, coreH * 0.6, "#082f49");
+  pRect(ctx, -coreW * 0.22, coreY + coreH * 0.28, coreW * 0.44, coreH * 0.44, plasmaCoreColor);
+  pRect(ctx, -coreW * 0.12, coreY + coreH * 0.36, coreW * 0.24, coreH * 0.28, plasmaHighlight);
+
+  // High-voltage lightning bolt emblem on generator mantle
+  pRect(ctx, -1, coreY - 4, 2, 4, "#facc15");
+  pRect(ctx, -3, coreY - 2, 6, 2, "#fde047");
+
+  // Heavy high-voltage power conduit busbars linking towers to core
+  pRect(ctx, -r * 0.7, coreY + 3, r * 1.4, 2, "#eab308");
+  pRect(ctx, -r * 0.7, coreY + 4, r * 1.4, 1, "#fde047");
+}
+
+/** Refinery: Heavy industrial Tiberium smelting complex with twin smokestacks & molten vat */
+function drawRefinery(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(18, Math.floor(z * 0.54));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 5, -r + 7, r * 2 + 5, r * 2 + 3, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Reinforced industrial concrete foundation
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#181f2a");
+
+  // 3. Dual massive industrial exhaust smokestacks (North-West)
+  const stackW = Math.max(6, Math.floor(r * 0.34));
+  const stackH = Math.floor(r * 1.05);
+  const stackY = -r * 1.05;
+
+  // Stack 1 (Left)
+  pRect(ctx, -r * 0.88, stackY, stackW, stackH, "#090d16");
+  pRect(ctx, -r * 0.88 + 1, stackY + 1, stackW - 2, stackH - 2, "#334155");
+  pRect(ctx, -r * 0.88 + 1, stackY + 1, 1.5, stackH - 2, "#64748b"); // Highlight
+  pRect(ctx, -r * 0.88, stackY + stackH * 0.35, stackW, 2, "#090d16"); // Reinforcing band
+  pRect(ctx, -r * 0.88, stackY + stackH * 0.7, stackW, 2, "#090d16");
+
+  // Stack 2 (Right)
+  pRect(ctx, -r * 0.42, stackY, stackW, stackH, "#090d16");
+  pRect(ctx, -r * 0.42 + 1, stackY + 1, stackW - 2, stackH - 2, "#334155");
+  pRect(ctx, -r * 0.42 + 1, stackY + 1, 1.5, stackH - 2, "#64748b");
+  pRect(ctx, -r * 0.42, stackY + stackH * 0.35, stackW, 2, "#090d16");
+  pRect(ctx, -r * 0.42, stackY + stackH * 0.7, stackW, 2, "#090d16");
+
+  // Volumetric pixelated smoke clouds from chimneys
+  const puff1 = Math.floor((tick * 0.25) % 4);
+  const puff2 = Math.floor((tick * 0.25 + 2) % 4);
+  pRect(ctx, -r * 0.88 + puff1 - 1, stackY - puff1 * 3 - 4, 5 + puff1, 4 + puff1, "#71717a");
+  pRect(ctx, -r * 0.42 + puff2 - 1, stackY - puff2 * 3 - 4, 5 + puff2, 4 + puff2, "#71717a");
+
+  // 4. Pressurized Silo Tank (North-East)
+  const siloW = Math.floor(r * 0.7);
+  const siloH = Math.floor(r * 0.9);
+  pRect(ctx, r * 0.15, -r * 0.9, siloW, siloH, "#090d16");
+  pRect(ctx, r * 0.15 + 1, -r * 0.9 + 1, siloW - 2, siloH - 2, pal.primary);
+  pRect(ctx, r * 0.15 + 2, -r * 0.9 + 1, 1.5, siloH - 2, pal.primaryLight);
+  // Silo capacity level indicator lights
+  pRect(ctx, r * 0.15 + siloW - 4, -r * 0.9 + 3, 2, 2, "#22c55e");
+  pRect(ctx, r * 0.15 + siloW - 4, -r * 0.9 + 7, 2, 2, "#22c55e");
+  pRect(ctx, r * 0.15 + siloW - 4, -r * 0.9 + 11, 2, 2, "#eab308");
+
+  // 5. Central Molten Smelting Vat
+  const vatW = Math.floor(r * 1.2);
+  const vatH = Math.floor(r * 0.52);
+  pRect(ctx, -vatW / 2, -r * 0.1, vatW, vatH, "#090d16");
+  pRect(ctx, -vatW / 2 + 1, -r * 0.1 + 1, vatW - 2, vatH - 2, "#78350f");
+  pRect(ctx, -vatW / 2 + 2, -r * 0.1 + 2, vatW - 4, vatH - 4, "#d97706");
+  pRect(ctx, -vatW / 2 + 4, -r * 0.1 + 4, vatW - 8, vatH - 8, "#fef08a");
+
+  // Vat boiling bubble pixel
+  const bubble = Math.sin(tick * 0.3) > 0 ? 1 : -1;
+  pRect(ctx, -2 + bubble * 5, -r * 0.1 + 4, 3, 2, "#ffffff");
+
+  // 6. Heavy Harvester Unloading Dock with hazard ramp
+  const dockW = Math.floor(r * 1.35);
+  const dockH = Math.floor(r * 0.6);
+  pRect(ctx, -dockW / 2, r * 0.35, dockW, dockH, "#090d16");
+  pRect(ctx, -dockW / 2 + 1, r * 0.35 + 1, dockW - 2, dockH - 2, pal.primaryDark);
+
+  // Unloading conveyor belt & hazard stripes
+  pRect(ctx, -dockW * 0.35, r * 0.38, dockW * 0.7, dockH * 0.55, "#1c1917");
+  pHazard(ctx, -dockW / 2 + 2, r * 0.72, dockW - 4, 3);
+}
+
+/** Barracks: Hardened military infantry garrison fortress with chevron roof & searchlight */
+function drawBarracks(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(16, Math.floor(z * 0.5));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 4, -r + 6, r * 2 + 4, r * 2 + 2, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Hardened steel-reinforced bunker hull
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#1e293b");
+
+  // 3. Multi-tier chevron blast armor roof
+  const roofW = Math.floor(r * 1.65);
+  const roofH = Math.floor(r * 0.9);
+  pRect(ctx, -roofW / 2, -r * 0.9, roofW, roofH, "#090d16");
+  pRect(ctx, -roofW / 2 + 1, -r * 0.9 + 1, roofW - 2, roofH - 2, pal.primaryDark);
+  pRect(ctx, -roofW / 2 + 2, -r * 0.9 + 2, roofW - 4, roofH - 4, pal.primary);
+
+  // Chevron tactical rank insignia on roof
+  pRect(ctx, -5, -r * 0.7, 10, 2, "#fef08a");
+  pRect(ctx, -3, -r * 0.58, 6, 2, "#fef08a");
+  pRect(ctx, -1, -r * 0.46, 2, 2, "#fef08a");
+
+  // Roof observation cupola / watchtower with searchlight
+  pRect(ctx, r * 0.35, -r * 1.05, r * 0.4, r * 0.35, "#090d16");
+  pRect(ctx, r * 0.35 + 1, -r * 1.05 + 1, r * 0.4 - 2, r * 0.35 - 2, "#334155");
+  // Searchlight beam glint
+  const searchPhase = Math.sin(tick * 0.15) > 0;
+  pRect(ctx, r * 0.35 + 2, -r * 1.05 + 2, 3, 2, searchPhase ? "#fef08a" : "#ca8a04");
+
+  // Communications antenna mast with pulsing red beacon
+  pRect(ctx, -r * 0.75, -r * 1.25, 2, r * 0.45, "#64748b");
+  pRect(ctx, -r * 0.75 - 1, -r * 1.3, 4, 3, (tick % 10 < 5) ? "#ef4444" : "#7f1d1d");
+
+  // 4. Double hydraulic sliding blast entrance
+  const doorW = Math.floor(r * 1.05);
+  const doorH = Math.floor(r * 0.7);
+  pRect(ctx, -doorW / 2, r * 0.18, doorW, doorH, "#090d16");
+
+  // Left & Right armored door leaves
+  const halfDoor = Math.floor(doorW / 2 - 2);
+  pRect(ctx, -doorW / 2 + 1, r * 0.18 + 1, halfDoor, doorH - 2, "#334155");
+  pRect(ctx, 1, r * 0.18 + 1, halfDoor, doorH - 2, "#334155");
+
+  // Hydraulic pistons & green ready lights
+  pRect(ctx, -doorW / 2 + 2, r * 0.26, 2, 2, "#22c55e");
+  pRect(ctx, doorW / 2 - 4, r * 0.26, 2, 2, "#22c55e");
+
+  // Door caution perimeter
+  pRect(ctx, -doorW / 2, r * 0.8, doorW, 2, "#ca8a04");
+}
+
+/** Factory / War Factory: Industrial armor foundry with crane gantry & roll-up bay door */
+function drawFactory(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(18, Math.floor(z * 0.54));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 5, -r + 7, r * 2 + 5, r * 2 + 3, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Heavy steel fabrication hall
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#181f2a");
+
+  // 3. Overhead structural crane gantry track across roof
+  const gantryW = Math.floor(r * 1.85);
+  const gantryH = Math.floor(r * 0.42);
+  pRect(ctx, -gantryW / 2, -r * 0.88, gantryW, gantryH, "#090d16");
+  pRect(ctx, -gantryW / 2 + 1, -r * 0.88 + 1, gantryW - 2, gantryH - 2, "#334155");
+
+  // Animated motorized gantry crane trolley
+  const trolleyPos = Math.floor(Math.sin(tick * 0.15) * (gantryW * 0.32));
+  pRect(ctx, trolleyPos - 4, -r * 0.88 + 1, 8, gantryH - 2, "#facc15");
+  pRect(ctx, trolleyPos - 1, -r * 0.88 + gantryH, 2, 4, "#ca8a04"); // Crane hoist hook
+
+  // 4. Team banner identification stripe
+  pRect(ctx, -r * 0.88, -r * 0.35, r * 1.76, 4, pal.primary);
+  pRect(ctx, -r * 0.88, -r * 0.35, r * 1.76, 1, pal.primaryLight);
+
+  // 5. Heavy segmented roll-up vehicle assembly bay door
+  const bayW = Math.floor(r * 1.5);
+  const bayH = Math.floor(r * 0.95);
+  pRect(ctx, -bayW / 2, r * 0.05, bayW, bayH, "#090d16");
+  pRect(ctx, -bayW / 2 + 1, r * 0.05 + 1, bayW - 2, bayH - 2, "#1e293b");
+
+  // Horizontal roll-up steel slats
+  for (let by = r * 0.15; by < r * 0.85; by += 4) {
+    pRect(ctx, -bayW / 2 + 2, by, bayW - 4, 1.5, "#090d16");
+  }
+
+  // Industrial yellow/black caution stripes at threshold
+  pHazard(ctx, -bayW / 2 + 2, r * 0.82, bayW - 4, 3);
+
+  // 6. External electrical sub-station transformer with electrical arc glint
+  pRect(ctx, r * 0.58, -r * 0.78, r * 0.38, r * 0.38, "#090d16");
+  pRect(ctx, r * 0.58 + 1, -r * 0.78 + 1, r * 0.38 - 2, r * 0.38 - 2, "#475569");
+  const spark = (tick % 14) === 0;
+  if (spark) {
+    pRect(ctx, r * 0.68, -r * 0.88, 3, 3, "#38bdf8");
+  }
+}
+
+/** TechLab: High-tech communications & radar dome complex */
+function drawTechLab(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(16, Math.floor(z * 0.48));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 4, -r + 6, r * 2 + 4, r * 2 + 2, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Octagonal fortified bunker platform
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#181f2a");
+
+  // 3. Geodesic sensor dome with faceted hexagonal panels
+  const domeR = Math.floor(r * 0.82);
+  pRect(ctx, -domeR, -domeR, domeR * 2, domeR * 2, "#090d16");
+  pRect(ctx, -domeR + 1, -domeR + 1, domeR * 2 - 2, domeR * 2 - 2, pal.primaryDark);
+  pRect(ctx, -domeR + 2, -domeR + 2, domeR * 2 - 4, domeR * 2 - 4, pal.primary);
+
+  // Faceted geodesic seams
+  pRect(ctx, -domeR + 2, 0, domeR * 2 - 4, 1, pal.primaryLight);
+  pRect(ctx, 0, -domeR + 2, 1, domeR * 2 - 4, pal.primaryLight);
+  pRect(ctx, -domeR * 0.6, -domeR * 0.6, domeR * 1.2, 1, pal.primaryLight);
+  pRect(ctx, -domeR * 0.6, domeR * 0.6, domeR * 1.2, 1, pal.primaryLight);
+
+  // 4. Central communications transmitter mast & status beacon
+  pRect(ctx, -1.5, -r * 1.05, 3, r * 1.05, "#64748b");
+  pRect(ctx, -5, -r * 1.05, 10, 2, "#38bdf8");
+
+  // Pulsing red danger beacon on spire tip
+  const beaconBlink = Math.sin(tick * 0.35) > 0;
+  pRect(ctx, -1.5, -r * 1.15, 3, 3, beaconBlink ? "#ef4444" : "#7f1d1d");
+
+  // 5. Glowing energy conduit circuit busbars
+  pRect(ctx, -r * 0.7, r * 0.45, r * 1.4, 2, pal.accent);
+  pRect(ctx, -r * 0.7, r * 0.45, 2, r * 0.35, pal.accent);
+  pRect(ctx, r * 0.7 - 2, r * 0.45, 2, r * 0.35, pal.accent);
+}
+
+/** Airfield: Dual-pad landing tarmac with illuminated runway lights, radar tower & fuel depot */
+function drawAirfield(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(18, Math.floor(z * 0.54));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 5, -r + 7, r * 2 + 5, r * 2 + 3, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Heavy reinforced concrete tarmac foundation
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#181f2a");
+  pRect(ctx, -r + 2, -r + 2, r * 2 - 4, r * 2 - 4, "#242d3a");
+
+  // 3. Perimeter yellow/black hazard markings
+  pHazard(ctx, -r + 3, -r + 3, r * 2 - 6, 2.5);
+  pHazard(ctx, -r + 3, r - 5.5, r * 2 - 6, 2.5);
+
+  // 4. Dual illuminated landing pads (Left Pad & Right Pad)
+  const padW = Math.floor(r * 0.72);
+  const padH = Math.floor(r * 0.72);
+
+  // Left Helipad / Landing Box
+  const pad1X = -r * 0.52;
+  const pad1Y = 0;
+  pRect(ctx, pad1X - padW / 2, pad1Y - padH / 2, padW, padH, "#0f172a");
+  pRect(ctx, pad1X - padW / 2 + 1, pad1Y - padH / 2 + 1, padW - 2, padH - 2, "#1e293b");
+  // Yellow [ H ] stencil
+  pRect(ctx, pad1X - 5, pad1Y - 6, 2, 12, "#facc15");
+  pRect(ctx, pad1X + 3, pad1Y - 6, 2, 12, "#facc15");
+  pRect(ctx, pad1X - 5, pad1Y - 1, 10, 2, "#facc15");
+
+  // Right Helipad / Landing Box
+  const pad2X = r * 0.42;
+  const pad2Y = r * 0.15;
+  pRect(ctx, pad2X - padW / 2, pad2Y - padH / 2, padW, padH, "#0f172a");
+  pRect(ctx, pad2X - padW / 2 + 1, pad2Y - padH / 2 + 1, padW - 2, padH - 2, "#1e293b");
+  // Yellow [ H ] stencil
+  pRect(ctx, pad2X - 5, pad2Y - 6, 2, 12, "#facc15");
+  pRect(ctx, pad2X + 3, pad2Y - 6, 2, 12, "#facc15");
+  pRect(ctx, pad2X - 5, pad2Y - 1, 10, 2, "#facc15");
+
+  // 5. Team banner stripe
+  pRect(ctx, -r * 0.85, -r * 0.55, r * 0.9, 3, pal.primary);
+
+  // 6. Air Traffic Control Tower & Rotating Radar Scanner at top-right
+  const towerX = r * 0.5;
+  const towerY = -r * 0.55;
+  pRect(ctx, towerX - 6, towerY - 6, 12, 12, "#090d16");
+  pRect(ctx, towerX - 5, towerY - 5, 10, 10, "#334155");
+  pRect(ctx, towerX - 3, towerY - 3, 6, 6, "#38bdf8"); // Cyan observation deck glass
+
+  // Rotating Radar Scanner Dish
+  const radarAngle = (tick * 0.1) % (Math.PI * 2);
+  const dishDx = Math.cos(radarAngle) * 5;
+  const dishDy = Math.sin(radarAngle) * 2;
+  pRect(ctx, towerX - 1, towerY - 12, 2, 6, "#64748b");
+  pRect(ctx, towerX + dishDx - 3, towerY - 14 + dishDy, 6, 2, "#cbd5e1");
+  pRect(ctx, towerX - 1, towerY - 15, 2, 2, "#ef4444"); // Red beacon
+
+  // 7. Pulsing green/amber runway approach lights along pad edges
+  const lightPulse = (tick % 8) < 4;
+  pRect(ctx, -r + 4, -r * 0.1, 2, 2, lightPulse ? "#22c55e" : "#14532d");
+  pRect(ctx, -r + 4, r * 0.5, 2, 2, lightPulse ? "#22c55e" : "#14532d");
+  pRect(ctx, r * 0.1, -r * 0.1, 2, 2, lightPulse ? "#f59e0b" : "#78350f");
+  pRect(ctx, r * 0.1, r * 0.5, 2, 2, lightPulse ? "#f59e0b" : "#78350f");
+}
+
+/** Turret: Circular reinforced gun emplacement with rotating twin heavy auto-cannons */
+function drawTurret(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  heading: number = 0,
+  tick: number = 0,
+  firingAge: number = -1,
+): void {
+  const r = Math.max(15, Math.floor(z * 0.45));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 4, -r + 5, r * 2 + 3, r * 2 + 2, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Stationary circular reinforced concrete barbette
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#1e293b");
+
+  // 8 Heavy steel foundation anchor bolts
+  const boltR = r - 3;
+  const boltPositions = [
+    [-boltR, -boltR], [0, -boltR - 1], [boltR, -boltR],
+    [-boltR - 1, 0], [boltR + 1, 0],
+    [-boltR, boltR], [0, boltR + 1], [boltR, boltR],
+  ];
+  for (const [bx, by] of boltPositions) {
+    pRect(ctx, bx, by, 2, 2, "#64748b");
+  }
+
+  // 3. Rotating 3D armored turret cupola & twin cannons (rotated by aim heading)
+  ctx.save();
+  ctx.rotate(heading);
+
+  const barrelLen = Math.floor(r * 1.5);
+  const barrelW = Math.max(2.5, Math.floor(r * 0.24));
+  const spacing = Math.floor(r * 0.38);
+
+  // Recoil for twin barrels
+  let recoilLeft = 0;
+  let recoilRight = 0;
+  if (firingAge >= 0 && firingAge <= 3) {
+    const rAmt = (3 - firingAge) * 1.5;
+    if (tick % 2 === 0) {
+      recoilLeft = rAmt;
+    } else {
+      recoilRight = rAmt;
+    }
+  }
+
+  // Left barrel (+X is forward)
+  pRect(ctx, -recoilLeft, -spacing - barrelW / 2, barrelLen, barrelW, "#090d16");
+  pRect(ctx, -recoilLeft + 1, -spacing - barrelW / 2 + 0.5, barrelLen - 2, barrelW - 1, "#475569");
+  pRect(ctx, barrelLen - recoilLeft - 3, -spacing - barrelW / 2 - 1, 3, barrelW + 2, "#181f2a"); // Muzzle brake
+
+  // Right barrel (+X is forward)
+  pRect(ctx, -recoilRight, spacing - barrelW / 2, barrelLen, barrelW, "#090d16");
+  pRect(ctx, -recoilRight + 1, spacing - barrelW / 2 + 0.5, barrelLen - 2, barrelW - 1, "#475569");
+  pRect(ctx, barrelLen - recoilRight - 3, spacing - barrelW / 2 - 1, 3, barrelW + 2, "#181f2a"); // Muzzle brake
+
+  // Muzzle flashes on firing barrel
+  if (firingAge >= 0 && firingAge <= 1) {
+    const flashSize = Math.floor(r * 0.45);
+    if (recoilLeft > 0) {
+      const tipL = barrelLen - recoilLeft;
+      pRect(ctx, tipL, -spacing - flashSize / 2, flashSize * 1.2, flashSize, "#fef08a");
+      pRect(ctx, tipL + 1, -spacing - flashSize / 4, flashSize * 0.7, flashSize / 2, "#ffffff");
+    }
+    if (recoilRight > 0) {
+      const tipR = barrelLen - recoilRight;
+      pRect(ctx, tipR, spacing - flashSize / 2, flashSize * 1.2, flashSize, "#fef08a");
+      pRect(ctx, tipR + 1, spacing - flashSize / 4, flashSize * 0.7, flashSize / 2, "#ffffff");
+    }
+  }
+
+  // Beveled rotating armored cupola box
+  const cupW = Math.floor(r * 0.95);
+  pRect(ctx, -cupW / 2, -cupW / 2, cupW, cupW, "#090d16");
+  pRect(ctx, -cupW / 2 + 1, -cupW / 2 + 1, cupW - 2, cupW - 2, pal.primaryDark);
+  pRect(ctx, -cupW / 2 + 2, -cupW / 2 + 2, cupW - 4, cupW - 4, pal.primary);
+
+  // Red targeting optic vision block slit (+X)
+  pRect(ctx, cupW / 2 - 3, -cupW * 0.25, 2, cupW * 0.5, "#ef4444");
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Tactical Icons, Thumbnails & Reticles (Retro C&C Command Sidebar Styling)
+// ---------------------------------------------------------------------------
+
+export function drawTacticalIcon(
+  ctx: CanvasRenderingContext2D,
+  kind: string,
+  cx: number,
+  cy: number,
+  _size: number = 46,
+  color: string = "#f59e0b",
+): void {
+  ctx.save();
+  ctx.translate(Math.floor(cx), Math.floor(cy));
+
+  // Outer beveled frame & high-tech dark carbon backplate
+  pRect(ctx, -23, -23, 46, 46, "#020617"); // Deep tactical border
+  pRect(ctx, -22, -22, 44, 44, "#0f172a"); // Outer chamfer
+  pRect(ctx, -21, -21, 42, 42, "#1e293b"); // Beveled body
+  pRect(ctx, -20, -20, 40, 40, "#090d16"); // High-contrast dark interior screen
+
+  // Tactical cyan corner brackets
+  pRect(ctx, -20, -20, 4, 1, "#38bdf8");
+  pRect(ctx, -20, -20, 1, 4, "#38bdf8");
+  pRect(ctx, 16, -20, 4, 1, "#38bdf8");
+  pRect(ctx, 19, -20, 1, 4, "#38bdf8");
+  pRect(ctx, -20, 19, 4, 1, "#38bdf8");
+  pRect(ctx, -20, 16, 1, 4, "#38bdf8");
+  pRect(ctx, 16, 19, 4, 1, "#38bdf8");
+  pRect(ctx, 19, 16, 1, 4, "#38bdf8");
+
+  const norm = kind.toLowerCase();
+
+  if (norm === "infantry") {
+    // Elite commando soldier facing forward
+    pRect(ctx, -9, -1, 18, 16, "#1e3a8a");
+    pRect(ctx, -8, 0, 16, 14, "#1d4ed8");
+    pRect(ctx, -6, 2, 12, 10, "#2563eb");
+    pRect(ctx, -6, 6, 4, 5, "#334155");
+    pRect(ctx, 2, 6, 4, 5, "#334155");
+    pRect(ctx, -2, 6, 4, 5, "#475569");
+
+    // Combat helmet & antenna
+    pRect(ctx, -9, -14, 18, 12, "#1e293b");
+    pRect(ctx, -8, -13, 16, 10, "#1d4ed8");
+    pRect(ctx, -6, -12, 12, 3, "#60a5fa");
+    pRect(ctx, -10, -18, 2, 8, "#94a3b8");
+    pRect(ctx, -11, -19, 4, 2, "#ef4444");
+
+    // Glowing Cyan Night-Vision Visor
+    pRect(ctx, -7, -6, 14, 5, "#0284c7");
+    pRect(ctx, -6, -5, 12, 3, "#38bdf8");
+    pRect(ctx, -4, -5, 4, 2, "#ffffff");
+
+    // Assault rifle
+    pRect(ctx, 4, 0, 12, 4, "#334155");
+    pRect(ctx, 6, -1, 9, 2, "#64748b");
+    pRect(ctx, 14, -2, 2, 4, "#09090b");
+  } else if (norm === "tank") {
+    // Heavy battle tank
+    pRect(ctx, -16, -14, 32, 6, "#1e293b");
+    pRect(ctx, -15, -13, 30, 4, "#334155");
+    pRect(ctx, -14, -12, 28, 2, "#64748b");
+    pRect(ctx, -16, 8, 32, 6, "#1e293b");
+    pRect(ctx, -15, 9, 30, 4, "#334155");
+    pRect(ctx, -14, 10, 28, 2, "#64748b");
+
+    pRect(ctx, -14, -8, 28, 16, "#1d4ed8");
+    pRect(ctx, -12, -7, 24, 14, "#2563eb");
+    pRect(ctx, -10, -6, 20, 12, "#3b82f6");
+
+    pRect(ctx, -7, -6, 14, 12, "#1e3a8a");
+    pRect(ctx, -6, -5, 12, 10, "#1d4ed8");
+    pRect(ctx, -4, -4, 8, 8, "#60a5fa");
+
+    pRect(ctx, 5, -2, 13, 4, "#334155");
+    pRect(ctx, 6, -1, 11, 2, "#94a3b8");
+    pRect(ctx, 16, -3, 3, 6, "#09090b");
+    pRect(ctx, 17, -2, 1, 4, "#cbd5e1");
+  } else if (norm === "artillery") {
+    // Long-range siege howitzer
+    pRect(ctx, -16, -13, 32, 5, "#334155");
+    pRect(ctx, -15, -12, 30, 3, "#64748b");
+    pRect(ctx, -16, 8, 32, 5, "#334155");
+    pRect(ctx, -15, 9, 30, 3, "#64748b");
+
+    pRect(ctx, -14, -8, 28, 16, "#1d4ed8");
+    pRect(ctx, -12, -7, 24, 14, "#2563eb");
+
+    pRect(ctx, -17, -4, 4, 8, "#09090b");
+    pRect(ctx, -16, -3, 2, 6, "#475569");
+
+    pRect(ctx, -4, -4, 8, 8, "#1e3a8a");
+    pRect(ctx, 0, -8, 18, 5, "#334155");
+    pRect(ctx, 2, -7, 15, 3, "#94a3b8");
+    pRect(ctx, 4, -6, 12, 1, "#cbd5e1");
+    pRect(ctx, 16, -10, 3, 9, "#09090b");
+    pRect(ctx, 17, -9, 1, 7, "#facc15");
+  } else if (norm === "harvester") {
+    // Heavy mining harvester
+    pRect(ctx, -16, -14, 32, 6, "#1e293b");
+    pRect(ctx, -15, -13, 30, 4, "#334155");
+    pRect(ctx, -14, -12, 28, 2, "#64748b");
+    pRect(ctx, -16, 8, 32, 6, "#1e293b");
+    pRect(ctx, -15, 9, 30, 4, "#334155");
+    pRect(ctx, -14, 10, 28, 2, "#64748b");
+
+    pRect(ctx, -14, -8, 28, 16, "#1e40af");
+    pRect(ctx, -12, -7, 10, 14, "#2563eb");
+    pRect(ctx, -10, -5, 6, 10, "#38bdf8");
+    pRect(ctx, -8, -4, 2, 8, "#ffffff");
+
+    pRect(ctx, 10, -10, 7, 20, "#475569");
+    pRect(ctx, 12, -9, 4, 18, "#94a3b8");
+    pRect(ctx, 14, -8, 2, 16, "#cbd5e1");
+    pRect(ctx, 15, -6, 2, 4, "#facc15");
+    pRect(ctx, 15, 2, 2, 4, "#facc15");
+
+    pRect(ctx, -1, -5, 10, 10, "#78350f");
+    pRect(ctx, 0, -4, 8, 8, "#d97706");
+    pRect(ctx, 1, -3, 6, 6, "#f59e0b");
+    pRect(ctx, 2, -2, 4, 4, "#fde047");
+    pRect(ctx, 3, -1, 2, 2, "#ffffff");
+  } else if (norm === "powerplant") {
+    // Power Plant cooling towers & glowing fusion core
+    pRect(ctx, -17, 12, 34, 4, "#eab308");
+    pRect(ctx, -15, 12, 4, 4, "#09090b");
+    pRect(ctx, -7, 12, 4, 4, "#09090b");
+    pRect(ctx, 1, 12, 4, 4, "#09090b");
+    pRect(ctx, 9, 12, 4, 4, "#09090b");
+
+    // Left tower
+    pRect(ctx, -16, -10, 11, 22, "#334155");
+    pRect(ctx, -15, -9, 9, 20, "#475569");
+    pRect(ctx, -14, -8, 7, 18, "#64748b");
+    pRect(ctx, -13, -7, 3, 16, "#94a3b8");
+    pRect(ctx, -17, -12, 13, 2, "#1e293b");
+    pRect(ctx, -16, -11, 11, 1, "#334155");
+    pRect(ctx, -14, -16, 7, 4, "#cbd5e1");
+    pRect(ctx, -12, -18, 5, 2, "#ffffff");
+
+    // Right tower
+    pRect(ctx, 5, -10, 11, 22, "#334155");
+    pRect(ctx, 6, -9, 9, 20, "#475569");
+    pRect(ctx, 7, -8, 7, 18, "#64748b");
+    pRect(ctx, 8, -7, 3, 16, "#94a3b8");
+    pRect(ctx, 4, -12, 13, 2, "#1e293b");
+    pRect(ctx, 5, -11, 11, 1, "#334155");
+    pRect(ctx, 7, -16, 7, 4, "#cbd5e1");
+    pRect(ctx, 9, -18, 5, 2, "#ffffff");
+
+    // Center Fusion Core & Lightning Bolt
+    pRect(ctx, -5, -4, 10, 16, "#0284c7");
+    pRect(ctx, -4, -3, 8, 14, "#38bdf8");
+    pRect(ctx, -3, -2, 6, 12, "#7dd3fc");
+    pRect(ctx, 0, -5, 2, 7, "#fde047");
+    pRect(ctx, -2, -1, 6, 2, "#facc15");
+    pRect(ctx, -1, 1, 2, 7, "#fde047");
+    pRect(ctx, 0, 0, 1, 1, "#ffffff");
+  } else if (norm === "refinery") {
+    // Refinery Silos & Ore Dumping Bay
+    pRect(ctx, -17, 12, 34, 4, "#eab308");
+    pRect(ctx, -15, 12, 4, 4, "#09090b");
+    pRect(ctx, -7, 12, 4, 4, "#09090b");
+    pRect(ctx, 1, 12, 4, 4, "#09090b");
+    pRect(ctx, 9, 12, 4, 4, "#09090b");
+
+    // Left tall metallic silo
+    pRect(ctx, -16, -12, 12, 24, "#334155");
+    pRect(ctx, -15, -11, 10, 22, "#475569");
+    pRect(ctx, -14, -10, 8, 20, "#94a3b8");
+    pRect(ctx, -13, -9, 3, 18, "#cbd5e1");
+    pRect(ctx, -16, -14, 12, 2, "#1e293b");
+    pRect(ctx, -14, -15, 8, 1, "#64748b");
+
+    // Right furnace building
+    pRect(ctx, -2, -6, 18, 18, "#1e293b");
+    pRect(ctx, -1, -5, 16, 16, "#2563eb");
+    pRect(ctx, 0, -4, 14, 14, "#1d4ed8");
+
+    // Smokestack & flame
+    pRect(ctx, 8, -14, 5, 8, "#334155");
+    pRect(ctx, 9, -13, 3, 7, "#64748b");
+    pRect(ctx, 8, -18, 5, 4, "#f97316");
+    pRect(ctx, 9, -17, 3, 2, "#fde047");
+    pRect(ctx, 10, -16, 1, 1, "#ffffff");
+
+    // Golden Ore Nuggets
+    pRect(ctx, 1, 4, 12, 7, "#09090b");
+    pRect(ctx, 2, 5, 10, 5, "#b45309");
+    pRect(ctx, 3, 5, 8, 4, "#f59e0b");
+    pRect(ctx, 4, 6, 6, 2, "#fde047");
+    pRect(ctx, 5, 6, 2, 2, "#ffffff");
+  } else if (norm === "barracks") {
+    // Hardened infantry fortress
+    pRect(ctx, -17, 12, 34, 4, "#334155");
+    pRect(ctx, -16, -10, 32, 22, "#1e3a8a");
+    pRect(ctx, -15, -9, 30, 20, "#1d4ed8");
+    pRect(ctx, -14, -8, 28, 4, "#3b82f6");
+
+    pRect(ctx, -14, -18, 2, 8, "#94a3b8");
+    pRect(ctx, -15, -19, 4, 2, "#ef4444");
+
+    pRect(ctx, -6, 2, 12, 10, "#09090b");
+    pRect(ctx, -5, 3, 10, 9, "#f59e0b");
+    pRect(ctx, -4, 4, 8, 8, "#fef08a");
+
+    pRect(ctx, -8, -3, 16, 3, "#facc15");
+    pRect(ctx, -2, -6, 4, 9, "#facc15");
+    pRect(ctx, -1, -5, 2, 7, "#ffffff");
+  } else if (norm === "factory") {
+    // Heavy dual-bay vehicle factory
+    pRect(ctx, -17, 12, 34, 4, "#334155");
+    pRect(ctx, -17, -11, 34, 23, "#1e293b");
+    pRect(ctx, -16, -10, 32, 21, "#1e40af");
+    pRect(ctx, -15, -9, 30, 4, "#3b82f6");
+
+    pRect(ctx, -14, 10, 28, 2, "#eab308");
+    pRect(ctx, -12, 10, 4, 2, "#09090b");
+    pRect(ctx, -4, 10, 4, 2, "#09090b");
+    pRect(ctx, 4, 10, 4, 2, "#09090b");
+    pRect(ctx, 12, 10, 4, 2, "#09090b");
+
+    pRect(ctx, -12, -2, 24, 12, "#09090b");
+    pRect(ctx, -9, 3, 18, 6, "#2563eb");
+    pRect(ctx, -7, 1, 14, 4, "#60a5fa");
+    pRect(ctx, -2, -1, 4, 3, "#93c5fd");
+    pRect(ctx, 2, 0, 7, 2, "#cbd5e1");
+
+    pRect(ctx, -6, -5, 2, 6, "#eab308");
+    pRect(ctx, -6, -1, 4, 2, "#38bdf8");
+    pRect(ctx, -5, 0, 2, 2, "#ffffff");
+  } else if (norm === "techlab") {
+    // Quantum Research Facility & Radar Dome
+    pRect(ctx, -17, 12, 34, 4, "#334155");
+    pRect(ctx, -15, 0, 30, 12, "#1e293b");
+    pRect(ctx, -14, 1, 28, 10, "#1e40af");
+
+    pRect(ctx, -12, -12, 24, 13, "#0284c7");
+    pRect(ctx, -11, -11, 22, 11, "#06b6d4");
+    pRect(ctx, -10, -10, 20, 9, "#38bdf8");
+    pRect(ctx, -8, -8, 16, 6, "#7dd3fc");
+    pRect(ctx, -6, -7, 6, 4, "#ffffff");
+
+    pRect(ctx, 4, -18, 3, 7, "#64748b");
+    pRect(ctx, 2, -19, 8, 3, "#cbd5e1");
+    pRect(ctx, 3, -18, 6, 1, "#ffffff");
+    pRect(ctx, 5, -20, 2, 2, "#38bdf8");
+  } else if (norm === "turret") {
+    // Defense turret with laser diode
+    pRect(ctx, -17, 11, 34, 5, "#eab308");
+    pRect(ctx, -15, 11, 4, 5, "#09090b");
+    pRect(ctx, -7, 11, 4, 5, "#09090b");
+    pRect(ctx, 1, 11, 4, 5, "#09090b");
+    pRect(ctx, 9, 11, 4, 5, "#09090b");
+
+    pRect(ctx, -15, 0, 30, 11, "#1e293b");
+    pRect(ctx, -14, 1, 28, 9, "#334155");
+    pRect(ctx, -13, 2, 26, 7, "#475569");
+
+    pRect(ctx, -11, -8, 22, 10, "#1e3a8a");
+    pRect(ctx, -10, -7, 20, 8, "#2563eb");
+    pRect(ctx, -8, -6, 16, 6, "#60a5fa");
+
+    pRect(ctx, -6, -17, 3, 10, "#334155");
+    pRect(ctx, -5, -16, 1, 9, "#94a3b8");
+    pRect(ctx, -7, -18, 5, 2, "#09090b");
+
+    pRect(ctx, 3, -17, 3, 10, "#334155");
+    pRect(ctx, 4, -16, 1, 9, "#94a3b8");
+    pRect(ctx, 2, -18, 5, 2, "#09090b");
+
+    pRect(ctx, -1, -5, 3, 3, "#ef4444");
+    pRect(ctx, 0, -4, 1, 1, "#ffffff");
+  } else if (norm === "damage") {
+    // Combat targeting crosshairs & explosive core
+    pRect(ctx, -16, -1, 32, 2, "#ef4444");
+    pRect(ctx, -1, -16, 2, 32, "#ef4444");
+    pRect(ctx, -10, -10, 20, 20, "#991b1b");
+    pRect(ctx, -8, -8, 16, 16, "#dc2626");
+    pRect(ctx, -6, -6, 12, 12, "#ef4444");
+    pRect(ctx, -3, -3, 6, 6, "#f87171");
+    pRect(ctx, -1, -1, 2, 2, "#ffffff");
+  } else if (norm === "hp") {
+    // Medical shield & cross
+    pRect(ctx, -14, -14, 28, 28, "#14532d");
+    pRect(ctx, -12, -12, 24, 24, "#16a34a");
+    pRect(ctx, -10, -10, 20, 20, "#22c55e");
+    pRect(ctx, -4, -9, 8, 18, "#ffffff");
+    pRect(ctx, -9, -4, 18, 8, "#ffffff");
+    pRect(ctx, -2, -2, 4, 4, "#86efac");
+  } else if (norm === "sell") {
+    // Gleaming gold credit medallion
+    pRect(ctx, -16, -16, 32, 32, "#78350f");
+    pRect(ctx, -14, -14, 28, 28, "#b45309");
+    pRect(ctx, -12, -12, 24, 24, "#d97706");
+    pRect(ctx, -10, -10, 20, 20, "#f59e0b");
+
+    // Bold Gold Dollar Sign
+    pRect(ctx, -2, -9, 4, 18, "#fef08a");
+    pRect(ctx, -7, -8, 13, 4, "#facc15");
+    pRect(ctx, -7, -8, 4, 7, "#facc15");
+    pRect(ctx, -7, -2, 14, 4, "#facc15");
+    pRect(ctx, 2, 0, 4, 7, "#facc15");
+    pRect(ctx, -7, 5, 14, 4, "#facc15");
+
+    pRect(ctx, -4, -6, 2, 2, "#ffffff");
+    pRect(ctx, 4, 3, 2, 2, "#ffffff");
+    pRect(ctx, -11, -11, 3, 3, "#ffffff");
+  } else if (norm === "repair") {
+    // Polished heavy chrome spanner with welding plasma arcs
+    pRect(ctx, -14, 8, 6, 6, "#1e293b");
+    pRect(ctx, -13, 9, 4, 4, "#090d16");
+
+    pRect(ctx, -11, 5, 6, 6, "#334155");
+    pRect(ctx, -8, 2, 6, 6, "#475569");
+    pRect(ctx, -5, -1, 6, 6, "#64748b");
+    pRect(ctx, -2, -4, 6, 6, "#94a3b8");
+    pRect(ctx, 1, -7, 6, 6, "#cbd5e1");
+    pRect(ctx, 4, -10, 6, 6, "#ffffff");
+
+    pRect(ctx, 4, -16, 12, 12, "#334155");
+    pRect(ctx, 5, -15, 10, 10, "#cbd5e1");
+    pRect(ctx, 8, -12, 6, 6, "#090d16");
+
+    pRect(ctx, 11, -17, 4, 4, "#0284c7");
+    pRect(ctx, 12, -18, 3, 3, "#38bdf8");
+    pRect(ctx, 13, -19, 2, 2, "#ffffff");
+    pRect(ctx, 8, -18, 2, 2, "#facc15");
+    pRect(ctx, 15, -14, 2, 2, "#facc15");
+  } else if (norm === "tab_buildings" || norm === "buildings" || norm === "structures") {
+    // Fortified citadel tab icon
+    pRect(ctx, -16, 10, 32, 4, "#eab308");
+    pRect(ctx, -14, 10, 4, 4, "#09090b");
+    pRect(ctx, -6, 10, 4, 4, "#09090b");
+    pRect(ctx, 2, 10, 4, 4, "#09090b");
+    pRect(ctx, 10, 10, 4, 4, "#09090b");
+
+    pRect(ctx, -15, -8, 8, 18, "#334155");
+    pRect(ctx, -14, -7, 6, 16, "#64748b");
+    pRect(ctx, 7, -8, 8, 18, "#334155");
+    pRect(ctx, 8, -7, 6, 16, "#64748b");
+
+    pRect(ctx, -7, -12, 14, 22, "#1e293b");
+    pRect(ctx, -6, -11, 12, 20, "#1d4ed8");
+    pRect(ctx, -4, -9, 8, 14, "#38bdf8");
+    pRect(ctx, -2, -7, 4, 4, "#ffffff");
+    pRect(ctx, -2, -15, 4, 3, "#ef4444");
+  } else if (norm === "tab_troops" || norm === "troops" || norm === "infantry_tab") {
+    // Elite commando helmet tab icon
+    pRect(ctx, -14, -12, 28, 22, "#1e293b");
+    pRect(ctx, -13, -11, 26, 20, "#1d4ed8");
+    pRect(ctx, -10, -10, 20, 5, "#60a5fa");
+
+    pRect(ctx, -14, -18, 2, 8, "#94a3b8");
+    pRect(ctx, -15, -19, 4, 2, "#ef4444");
+
+    pRect(ctx, -11, -4, 22, 7, "#0284c7");
+    pRect(ctx, -10, -3, 20, 5, "#38bdf8");
+    pRect(ctx, -7, -3, 6, 3, "#ffffff");
+
+    pRect(ctx, -8, 5, 16, 5, "#334155");
+    pRect(ctx, -6, 6, 12, 3, "#090d16");
+  } else if (norm === "tab_vehicles" || norm === "vehicles" || norm === "armor_tab") {
+    // Heavy battle tank tab icon
+    pRect(ctx, -16, -13, 32, 5, "#334155");
+    pRect(ctx, -15, -12, 30, 3, "#64748b");
+    pRect(ctx, -16, 8, 32, 5, "#334155");
+    pRect(ctx, -15, 9, 30, 3, "#64748b");
+
+    pRect(ctx, -14, -8, 28, 16, "#1d4ed8");
+    pRect(ctx, -12, -7, 24, 14, "#2563eb");
+    pRect(ctx, -10, -6, 20, 12, "#3b82f6");
+
+    pRect(ctx, -6, -5, 12, 10, "#1e3a8a");
+    pRect(ctx, -4, -4, 8, 8, "#60a5fa");
+    pRect(ctx, 4, -2, 13, 4, "#334155");
+    pRect(ctx, 5, -1, 11, 2, "#cbd5e1");
+    pRect(ctx, 15, -3, 3, 6, "#09090b");
+  } else if (norm === "airfield") {
+    // Airfield landing pad & control tower
+    pRect(ctx, -17, 12, 34, 4, "#eab308");
+    pRect(ctx, -15, 12, 4, 4, "#09090b");
+    pRect(ctx, -7, 12, 4, 4, "#09090b");
+    pRect(ctx, 1, 12, 4, 4, "#09090b");
+    pRect(ctx, 9, 12, 4, 4, "#09090b");
+
+    // Tarmac landing slab
+    pRect(ctx, -17, -10, 34, 22, "#1e293b");
+    pRect(ctx, -16, -9, 32, 20, "#242d3a");
+
+    // Helipad Landing Circle & [ H ]
+    pRect(ctx, -13, -6, 16, 14, "#0f172a");
+    pRect(ctx, -12, -5, 14, 12, "#1e293b");
+    pRect(ctx, -10, -3, 2, 8, "#facc15");
+    pRect(ctx, -4, -3, 2, 8, "#facc15");
+    pRect(ctx, -10, 0, 8, 2, "#facc15");
+
+    // Air traffic control radar tower on right
+    pRect(ctx, 5, -8, 10, 16, "#1e293b");
+    pRect(ctx, 6, -7, 8, 14, "#334155");
+    pRect(ctx, 7, -6, 6, 5, "#38bdf8");
+    pRect(ctx, 9, -15, 2, 7, "#64748b");
+    pRect(ctx, 6, -17, 8, 3, "#cbd5e1");
+    pRect(ctx, 9, -19, 2, 2, "#ef4444");
+
+    // Runway approach lights
+    pRect(ctx, -15, -8, 2, 2, "#22c55e");
+    pRect(ctx, -15, 6, 2, 2, "#22c55e");
+  } else if (norm === "gunship") {
+    // Heavy Attack Helicopter / Rotary Gunship (Vivid & Distinct from Jet Fighter)
+    // Spinning top rotor blade disc (spinning blurred rotor line)
+    pRect(ctx, -18, -14, 36, 2, "#94a3b8");
+    pRect(ctx, -14, -15, 28, 1, "#cbd5e1");
+    pRect(ctx, -1, -16, 2, 5, "#475569");
+    pRect(ctx, -2, -17, 4, 2, "#facc15");
+
+    // Heavy armored helicopter fuselage
+    pRect(ctx, -7, -10, 14, 20, "#1e3a8a");
+    pRect(ctx, -6, -9, 12, 18, "#1d4ed8");
+    pRect(ctx, -4, -7, 8, 14, "#2563eb");
+
+    // Armored Cockpit Canopy with green tactical HUD glass
+    pRect(ctx, -4, -6, 8, 6, "#15803d");
+    pRect(ctx, -3, -5, 6, 4, "#22c55e");
+    pRect(ctx, -2, -5, 2, 2, "#86efac");
+
+    // Chin-Mounted 3-Barrel Rotary Vulcan Minigun (at bottom)
+    pRect(ctx, -2, 10, 4, 6, "#09090b");
+    pRect(ctx, -1, 12, 2, 5, "#64748b");
+    pRect(ctx, -2, 16, 4, 2, "#facc15");
+
+    // Side Weapon Pylons with Heavy Rocket Pods (Left & Right)
+    pRect(ctx, -14, -2, 7, 3, "#334155");
+    pRect(ctx, -15, -4, 4, 8, "#1e293b");
+    pRect(ctx, -15, -4, 4, 2, "#ea580c");
+    pRect(ctx, -15, 2, 4, 2, "#ea580c");
+
+    pRect(ctx, 7, -2, 7, 3, "#334155");
+    pRect(ctx, 11, -4, 4, 8, "#1e293b");
+    pRect(ctx, 11, -4, 4, 2, "#ea580c");
+    pRect(ctx, 11, 2, 4, 2, "#ea580c");
+
+    // Tail boom extending upwards with fenestron tail rotor
+    pRect(ctx, -2, -12, 4, 5, "#334155");
+    pRect(ctx, -6, -11, 4, 3, "#eab308");
+  } else if (norm === "tab_aircraft" || norm === "aircraft" || norm === "air_tab" || norm === "interceptor") {
+    // Supersonic Stealth Jet Fighter (Delta Wings, Sharp Needle Radome, Plasma Afterburners)
+    // Swept delta wings
+    pRect(ctx, -18, 0, 36, 4, "#1e3a8a");
+    pRect(ctx, -16, -3, 32, 4, "#1d4ed8");
+    pRect(ctx, -13, -6, 26, 4, "#2563eb");
+    pRect(ctx, -10, 4, 20, 4, "#1e40af");
+
+    // Wingtip missiles / laser pods
+    pRect(ctx, -18, -8, 2, 14, "#38bdf8");
+    pRect(ctx, 16, -8, 2, 14, "#38bdf8");
+
+    // Twin canted vertical stabilizers / rudders
+    pRect(ctx, -7, 2, 3, 7, "#60a5fa");
+    pRect(ctx, 4, 2, 3, 7, "#60a5fa");
+
+    // Needle fuselage & Sharp Radar Nose Radome
+    pRect(ctx, -4, -14, 8, 22, "#334155");
+    pRect(ctx, -3, -16, 6, 24, "#475569");
+    pRect(ctx, -2, -18, 4, 26, "#94a3b8");
+    pRect(ctx, -1, -20, 2, 4, "#cbd5e1");
+
+    // Holographic Cyan Pilot Cockpit Canopy
+    pRect(ctx, -2, -10, 4, 8, "#0284c7");
+    pRect(ctx, -1, -9, 2, 6, "#38bdf8");
+    pRect(ctx, 0, -8, 1, 3, "#ffffff");
+
+    // Twin High-Thrust Flaming Orange/Yellow Plasma Rocket Afterburners
+    pRect(ctx, -5, 8, 3, 7, "#ea580c");
+    pRect(ctx, 2, 8, 3, 7, "#ea580c");
+    pRect(ctx, -4, 10, 2, 6, "#facc15");
+    pRect(ctx, 3, 10, 2, 6, "#facc15");
+    pRect(ctx, -4, 14, 2, 3, "#ffffff");
+    pRect(ctx, 3, 14, 2, 3, "#ffffff");
+  } else if (norm === "play") {
+    pRect(ctx, -6, -10, 12, 20, color);
+  } else if (norm === "pause") {
+    pRect(ctx, -8, -10, 6, 20, color);
+    pRect(ctx, 2, -10, 6, 20, color);
+  } else if (norm === "fast_forward") {
+    pRect(ctx, -10, -10, 8, 20, color);
+    pRect(ctx, 2, -10, 8, 20, color);
+  } else if (norm === "cross") {
+    pRect(ctx, -8, -8, 16, 16, "#ef4444");
+  }
+
+  ctx.restore();
+}
+
+const thumbnailCache = new Map<string, string>();
+
+export function getThumbnailDataUrl(kind: string, _owner: number = 0): string {
+  const cached = thumbnailCache.get(kind);
+  if (cached) return cached;
+
+  if (typeof document === "undefined") {
+    const fallback = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="%2318181b"/></svg>`;
+    thumbnailCache.set(kind, fallback);
+    return fallback;
+  }
+
+  const c = document.createElement("canvas");
+  c.width = 48;
+  c.height = 48;
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    drawTacticalIcon(ctx, kind, 24, 24, 46);
+  }
+  const url = c.toDataURL();
+  thumbnailCache.set(kind, url);
+  return url;
+}
+
 export function drawSelectionReticle(
   ctx: CanvasRenderingContext2D,
   px: number,
   py: number,
   size: number,
-  tick: number,
+  _tick: number,
 ): void {
-  const half = size * 0.55;
-  const arm = Math.max(3, size * 0.22);
-  const pulse = 0.85 + Math.sin(tick * 0.12) * 0.15;
+  const r = Math.floor(size * 0.6);
+  const len = Math.max(4, Math.floor(r * 0.35));
 
-  ctx.save();
-  ctx.translate(px, py);
-  ctx.strokeStyle = `rgba(255, 226, 122, ${pulse})`;
-  ctx.lineWidth = 1.75;
+  ctx.strokeStyle = "#ffe27a";
+  ctx.lineWidth = 1.5;
 
-  // Top-left
   ctx.beginPath();
-  ctx.moveTo(-half, -half + arm);
-  ctx.lineTo(-half, -half);
-  ctx.lineTo(-half + arm, -half);
+  // Top-left corner
+  ctx.moveTo(px - r, py - r + len);
+  ctx.lineTo(px - r, py - r);
+  ctx.lineTo(px - r + len, py - r);
+  // Top-right corner
+  ctx.moveTo(px + r - len, py - r);
+  ctx.lineTo(px + r, py - r);
+  ctx.lineTo(px + r, py - r + len);
+  // Bottom-left corner
+  ctx.moveTo(px - r, py + r - len);
+  ctx.lineTo(px - r, py + r);
+  ctx.lineTo(px - r + len, py + r);
+  // Bottom-right corner
+  ctx.moveTo(px + r - len, py + r);
+  ctx.lineTo(px + r, py + r);
+  ctx.lineTo(px + r, py + r - len);
   ctx.stroke();
-
-  // Top-right
-  ctx.beginPath();
-  ctx.moveTo(half - arm, -half);
-  ctx.lineTo(half, -half);
-  ctx.lineTo(half, -half + arm);
-  ctx.stroke();
-
-  // Bottom-right
-  ctx.beginPath();
-  ctx.moveTo(half, half - arm);
-  ctx.lineTo(half, half);
-  ctx.lineTo(half - arm, half);
-  ctx.stroke();
-
-  // Bottom-left
-  ctx.beginPath();
-  ctx.moveTo(-half + arm, half);
-  ctx.lineTo(-half, half);
-  ctx.lineTo(-half, half - arm);
-  ctx.stroke();
-
-  ctx.restore();
 }
 
-/** Stylized Health Bar */
 export function drawHealthBar(
   ctx: CanvasRenderingContext2D,
   px: number,
@@ -1175,127 +1774,36 @@ export function drawHealthBar(
   hp: number,
   maxHp: number,
 ): void {
-  if (maxHp <= 0) return;
-  const frac = Math.max(0, Math.min(1, hp / maxHp));
+  const w = Math.floor(size * 0.85);
+  const h = 3.5;
+  const x = Math.floor(px - w / 2);
+  const y = Math.floor(py - size * 0.6 - 5);
 
-  const barW = size * 0.85;
-  const barH = Math.max(3, size * 0.1);
-  const bx = px - barW / 2;
-  const by = py - size * 0.65;
-
-  // Dark background frame
-  ctx.fillStyle = "rgba(10, 14, 18, 0.85)";
-  ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
-  ctx.strokeStyle = "rgba(51, 65, 85, 0.9)";
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(bx - 1, by - 1, barW + 2, barH + 2);
-
-  // Gradient health bar
-  const hpColor = frac > 0.5 ? "#22c55e" : frac > 0.25 ? "#eab308" : "#ef4444";
-  ctx.fillStyle = hpColor;
-  ctx.fillRect(bx, by, barW * frac, barH);
-
-  // Subtle gloss highlight
-  ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
-  ctx.fillRect(bx, by, barW * frac, barH * 0.4);
+  pRect(ctx, x - 1, y - 1, w + 2, h + 2, "#09090b");
+  const pct = Math.max(0, Math.min(1, hp / Math.max(1, maxHp)));
+  const barCol = pct > 0.5 ? "#22c55e" : pct > 0.25 ? "#f59e0b" : "#ef4444";
+  pRect(ctx, x, y, Math.floor(w * pct), h, barCol);
 }
 
-/** Building Rally Point Marker and Line */
 export function drawRallyPoint(
   ctx: CanvasRenderingContext2D,
-  bpx: number,
-  bpy: number,
-  rpx: number,
-  rpy: number,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
   tick: number,
 ): void {
-  // Dashed rally path line
   ctx.save();
-  ctx.strokeStyle = "rgba(255, 226, 122, 0.65)";
+  ctx.strokeStyle = "rgba(6, 182, 212, 0.5)";
   ctx.lineWidth = 1.5;
-  ctx.setLineDash([4, 4]);
-  ctx.lineDashOffset = -(tick * 0.5) % 8;
+  ctx.setLineDash([3, 3]);
+  ctx.lineDashOffset = -(tick * 0.5) % 6;
   ctx.beginPath();
-  ctx.moveTo(bpx, bpy);
-  ctx.lineTo(rpx, rpy);
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
   ctx.stroke();
-
-  // Target waypoint beacon / flag
   ctx.setLineDash([]);
-  const pulse = 4 + Math.sin(tick * 0.15) * 2;
-  ctx.strokeStyle = "#ffe27a";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(rpx, rpy, pulse, 0, Math.PI * 2);
-  ctx.stroke();
 
-  // Center beacon dot
-  ctx.fillStyle = "#ffe27a";
-  ctx.beginPath();
-  ctx.arc(rpx, rpy, 2, 0, Math.PI * 2);
-  ctx.fill();
+  pRect(ctx, toX - 2, toY - 2, 4, 4, "#06b6d4");
   ctx.restore();
-}
-
-// ---------------------------------------------------------------------------
-// Canvas Path Helpers
-// ---------------------------------------------------------------------------
-
-function drawRoundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-): void {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-function drawChamferedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  c: number,
-): void {
-  ctx.beginPath();
-  ctx.moveTo(x + c, y);
-  ctx.lineTo(x + w - c, y);
-  ctx.lineTo(x + w, y + c);
-  ctx.lineTo(x + w, y + h - c);
-  ctx.lineTo(x + w - c, y + h);
-  ctx.lineTo(x + c, y + h);
-  ctx.lineTo(x, y + h - c);
-  ctx.lineTo(x, y + c);
-  ctx.closePath();
-}
-
-function drawRegularPolygon(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  radius: number,
-  sides: number,
-): void {
-  ctx.beginPath();
-  for (let i = 0; i < sides; i++) {
-    const angle = (i * 2 * Math.PI) / sides;
-    const x = cx + radius * Math.cos(angle);
-    const y = cy + radius * Math.sin(angle);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
 }

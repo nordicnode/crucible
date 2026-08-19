@@ -104,14 +104,26 @@ function renderElo(points: EloPoint[]): void {
   const span = max - min || 1;
   const w = 320;
   const h = 60;
-  const pts = vals
-    .map((v, i) => `${(i / (vals.length - 1)) * w},${h - ((v - min) / span) * (h - 6) - 3}`)
-    .join(" ");
   elt.innerHTML = `
     <div class="muted">Champion Elo over time (${Math.round(vals[0])} → ${Math.round(vals[vals.length - 1])})</div>
-    <svg width="${w}" height="${h}" class="spark">
-      <polyline points="${pts}" fill="none" stroke="#c8920e" stroke-width="1.5" />
-    </svg>`;
+    <canvas width="${w}" height="${h}" class="spark" aria-label="Champion Elo over time"></canvas>`;
+
+  const chart = elt.querySelector("canvas");
+  const ctx = chart?.getContext("2d");
+  if (!chart || !ctx) return;
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = "#070a0e";
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = "#c8920e";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  vals.forEach((v, i) => {
+    const x = Math.floor((i / (vals.length - 1)) * (w - 2)) + 1;
+    const y = Math.floor(h - ((v - min) / span) * (h - 8) - 4);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
 }
 
 function renderStats(status: any, stats: TrainingStat[]): void {

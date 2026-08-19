@@ -39,8 +39,7 @@ function hide(id: string): void {
 class Spectate {
   active = false;
   readonly renderer = new Renderer();
-
-  private world = new World();
+  readonly world = new World();
   private replayJson: string | null = null;
   private meta: ReplayMeta | null = null;
   private tick = 0;
@@ -118,12 +117,12 @@ class Spectate {
 
       // Camera on player 0's HQ, like a live match start.
       const hq = this.meta.hq_tiles[0];
-      this.renderer.camera.focusOn(
+      this.renderer.camera.centerOn(
         hq[0] + 0.5,
         hq[1] + 0.5,
-        18,
         window.innerWidth,
         window.innerHeight,
+        18,
       );
 
       hide("overlay");
@@ -158,7 +157,7 @@ class Spectate {
     if (this.replayJson == null) return;
     this.playing = !this.playing;
     this.lastTime = performance.now();
-    el("sp-play").textContent = this.playing ? "⏸" : "▶";
+    el("sp-play").textContent = this.playing ? "PAUSE" : "PLAY";
     if (this.playing && this.tick >= this.duration) this.tick = 0;
   }
 

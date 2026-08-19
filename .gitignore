@@ -4,6 +4,7 @@
 # Node / client
 node_modules/
 client/dist/
+client/public/openhv/
 *.tsbuildinfo
 
 # Generated wasm-bindgen bindings (built by scripts/build-wasm.sh)

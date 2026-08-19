@@ -1,109 +1,29 @@
 //! M7 acceptance: a recorded "cheese" strategy (which beats the champion) is
 //! turned into a ghost, and a focused self-play run learns to beat it within a
 //! bounded generation budget.
+//!
+//! The cheese is the medium scripted bot: a refinery-funded pressure build
+//! (6 infantry + 4 tanks with periodic attacks) that destroys a no-op
+//! champion's HQ and threatens even the bootstrapped economy lineage. The
+//! deposit-only economy rework made simple early rushes beatable by any
+//! competent opener, so the cheese must bring real force.
 
-use crucible_ai::{run_match_detailed, run_match_with_replay, Bot, GenomeBot, GENOME_LEN};
+use crucible_ai::{run_match_detailed, run_match_with_replay, GenomeBot, GENOME_LEN};
 use crucible_evo::{evaluate_economy, ghost_fitness, Ghost, Population};
-use crucible_sim::{
-    BuildingType, Command, EntityId, Game, GameConfig, Player, Rng, Stance, UnitType,
-};
+use crucible_sim::{GameConfig, Player, Rng};
 
 const GHOST_SEEDS: [u64; 4] = [10, 11, 12, 13];
 
 fn test_config() -> GameConfig {
     GameConfig {
-        timeout_ticks: 1800, // 3 minutes: enough for a rush to resolve
+        timeout_ticks: 1800, // 3 minutes: enough for a push to resolve
         ..GameConfig::default()
     }
 }
 
-/// A rush "cheese": barracks + four infantry that attack the enemy HQ. Beats a
-/// no-op champion (and an economy-only lineage) but dies to any early defense.
-#[derive(Default)]
-struct RushBot {
-    attacked: bool,
-}
-
-fn free_build_tile(game: &Game, player: Player) -> Option<(u8, u8)> {
-    let (hx, hy) = game.hq(player)?.tile;
-    for dy in 1..6i32 {
-        for dx in 1..6i32 {
-            let t = (
-                (hx as i32 + dx).clamp(0, 63) as u8,
-                (hy as i32 + dy).clamp(0, 63) as u8,
-            );
-            if game.map.is_passable(t.0, t.1)
-                && game.map.ore_at(t.0, t.1) == 0
-                && !game.buildings.iter().any(|b| b.tile == t)
-            {
-                return Some(t);
-            }
-        }
-    }
-    None
-}
-
-impl Bot for RushBot {
-    fn name(&self) -> &'static str {
-        "rush"
-    }
-    fn decide(&mut self, game: &Game, player: Player) -> Vec<Command> {
-        let has_barracks = game
-            .buildings
-            .iter()
-            .any(|b| b.owner == player && b.btype == BuildingType::Barracks);
-        if !has_barracks {
-            if let Some(tile) = free_build_tile(game, player) {
-                return vec![Command::PlaceBuilding {
-                    player,
-                    btype: BuildingType::Barracks,
-                    tile,
-                }];
-            }
-            return vec![];
-        }
-
-        let infantry: Vec<EntityId> = game
-            .units
-            .iter()
-            .filter(|u| u.owner == player && u.utype == UnitType::Infantry)
-            .map(|u| u.id)
-            .collect();
-        if infantry.len() < 4 {
-            if let Some(b) = game
-                .buildings
-                .iter()
-                .find(|b| b.owner == player && b.btype == BuildingType::Barracks)
-            {
-                if b.queue.len() < game.config.max_queue {
-                    return vec![Command::TrainUnit {
-                        player,
-                        building: b.id,
-                        utype: UnitType::Infantry,
-                    }];
-                }
-            }
-            return vec![];
-        }
-
-        if !self.attacked {
-            self.attacked = true;
-            if let Some(t) = game.hq(player.enemy()).map(|b| b.tile) {
-                return vec![Command::MoveGroup {
-                    player,
-                    units: infantry,
-                    waypoint: t,
-                    stance: Stance::Aggressive,
-                }];
-            }
-        }
-        vec![]
-    }
-}
-
-/// Record the rush beating a no-op champion (destroys its HQ).
+/// Record the cheese beating a no-op champion (destroys its HQ).
 fn record_cheese(seed: u64, config: &GameConfig) -> crucible_sim::Replay {
-    let mut human = RushBot::default();
+    let mut human = crucible_ai::hard();
     let mut champion = GenomeBot::new(vec![0.0f32; GENOME_LEN]); // no-op
     let (_outcome, replay) = run_match_with_replay(seed, config, &mut human, &mut champion);
     assert_eq!(
@@ -146,8 +66,8 @@ fn lineage_learns_to_beat_the_cheese_ghost() {
     let mut pop = Population::init(
         &mut rng,
         crucible_evo::EsParams {
-            population_size: 16,
-            mu: 4,
+            population_size: 24,
+            mu: 6,
             sigma: 0.08,
             ..crucible_evo::EsParams::default()
         },
@@ -169,11 +89,11 @@ fn lineage_learns_to_beat_the_cheese_ghost() {
     let before = win_rate_vs_ghosts(&pop.genomes[pop.best_index(&fitnesses)], &ghosts, &config);
     assert!(
         before < 0.5,
-        "the economy lineage should lose to the rush before focused training (got {before})"
+        "the economy lineage should lose to the cheese before focused training (got {before})"
     );
 
-    // Stage 2: focused training vs the rush ghost.
-    let generations = 6;
+    // Stage 2: focused training vs the cheese ghost.
+    let generations = 8;
     let mut ghost_fitnesses: Vec<f32> = pop
         .genomes
         .iter()

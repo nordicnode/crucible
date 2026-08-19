@@ -231,51 +231,54 @@ fn try_generate(seed: u64) -> Option<Map> {
     let mut passable = vec![true; MAP_TILES];
     let mut ore = vec![0i32; MAP_TILES];
 
-    // Spawn positions (mirrored).
-    let hx = rng.range(6, 21) as u8;
-    let hy = rng.range(6, 21) as u8;
+    // Real random 4-corner spawning (mirrored):
+    // 0: Top-Left (7..18, 7..18) -> HQ1 in Bottom-Right
+    // 1: Bottom-Left (7..18, 45..56) -> HQ1 in Top-Right
+    // 2: Top-Right (45..56, 7..18) -> HQ1 in Bottom-Left
+    // 3: Bottom-Right (45..56, 45..56) -> HQ1 in Top-Left
+    let corner = rng.below(4);
+    let (hx, hy) = match corner {
+        0 => (rng.range(7, 18) as u8, rng.range(7, 18) as u8),
+        1 => (rng.range(7, 18) as u8, rng.range(45, 56) as u8),
+        2 => (rng.range(45, 56) as u8, rng.range(7, 18) as u8),
+        _ => (rng.range(45, 56) as u8, rng.range(45, 56) as u8),
+    };
     let hq0 = (hx, hy);
     let hq1 = (mirror(hx), mirror(hy));
 
-    // Obstacles: symmetric blobs.
+    // Obstacles: symmetric rock formations.
     let blobs = 2 + rng.below(3) as usize; // 2..=4
     for _ in 0..blobs {
-        let cx = rng.range(4, 60) as u8;
-        let cy = rng.range(4, 60) as u8;
+        let cx = rng.range(6, 58) as u8;
+        let cy = rng.range(6, 58) as u8;
         let radius = 2 + rng.below(3) as i32; // 2..=4
         for (x, y) in [(cx, cy), (mirror(cx), mirror(cy))] {
             stamp_blob(&mut passable, x, y, radius);
         }
     }
 
-    // Clear around the HQs so spawns and their main fields are open.
+    // Clear construction perimeter around each HQ (radius 4 tiles).
     for (x, y) in [hq0, hq1] {
-        clear_around(&mut passable, x, y, 3);
+        clear_around(&mut passable, x, y, 4);
     }
 
-    // Main ore fields: a ring of 8 tiles around each HQ.
-    for (x, y) in [hq0, hq1] {
-        for (dx, dy) in RING_8 {
-            let (ox, oy) = (x as i32 + dx, y as i32 + dy);
-            if in_bounds(ox, oy) {
-                ore[tile_index(ox as u8, oy as u8)] = 400;
-                passable[tile_index(ox as u8, oy as u8)] = true;
-            }
-        }
-    }
+    // Main base natural ore pocket: placed strategically 5-6 tiles away from HQ
+    let base_ox = if hx < 32 { hx + 5 } else { hx - 5 };
+    let base_oy = if hy < 32 { hy + 5 } else { hy - 5 };
+    stamp_ore_cluster_amount(&mut ore, &mut passable, base_ox, base_oy, 1200);
 
-    // Expansion sites: generate N pairs (site + mirror).
+    // Expansion sites: generate N strategic pairs across the battlefield
     let sites = 2 + rng.below(3) as usize; // 2..=4
     let mut placed = 0;
     let mut guard = 0;
     while placed < sites && guard < 200 {
         guard += 1;
-        let sx = rng.range(10, 54) as u8;
-        let sy = rng.range(10, 54) as u8;
+        let sx = rng.range(12, 52) as u8;
+        let sy = rng.range(12, 52) as u8;
         if !valid_site_center(&passable, sx, sy, hq0, hq1) {
             continue;
         }
-        stamp_ore_cluster_symmetric(&mut ore, &mut passable, sx, sy);
+        stamp_ore_cluster_amount(&mut ore, &mut passable, sx, sy, 1500);
         placed += 1;
     }
 
@@ -294,35 +297,31 @@ fn try_generate(seed: u64) -> Option<Map> {
 }
 
 fn open_map(seed: u64) -> Map {
-    let hq0 = (8u8, 8u8);
-    let hq1 = (mirror(8), mirror(8));
+    let mut rng = Rng::from_seed(seed);
+    let corner = rng.below(4);
+    let (hx, hy) = match corner {
+        0 => (10u8, 10u8),
+        1 => (10u8, 53u8),
+        2 => (53u8, 10u8),
+        _ => (53u8, 53u8),
+    };
+    let hq0 = (hx, hy);
+    let hq1 = (mirror(hx), mirror(hy));
+    let mut passable = vec![true; MAP_TILES];
     let mut ore = vec![0i32; MAP_TILES];
-    for (x, y) in [hq0, hq1] {
-        for (dx, dy) in RING_8 {
-            let (ox, oy) = (x as i32 + dx, y as i32 + dy);
-            if in_bounds(ox, oy) {
-                ore[tile_index(ox as u8, oy as u8)] = 400;
-            }
-        }
-    }
+
+    let base_ox = if hx < 32 { hx + 5 } else { hx - 5 };
+    let base_oy = if hy < 32 { hy + 5 } else { hy - 5 };
+    stamp_ore_cluster_amount(&mut ore, &mut passable, base_ox, base_oy, 1200);
+    stamp_ore_cluster_amount(&mut ore, &mut passable, 32, 22, 1500);
+
     Map {
         seed,
-        passable: vec![true; MAP_TILES],
+        passable,
         ore,
         hq_tiles: [hq0, hq1],
     }
 }
-
-const RING_8: [(i32, i32); 8] = [
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (-1, 0),
-    (1, 0),
-    (-1, 1),
-    (0, 1),
-    (1, 1),
-];
 
 fn in_bounds(x: i32, y: i32) -> bool {
     x >= 0 && y >= 0 && x < MAP_SIZE as i32 && y < MAP_SIZE as i32
@@ -351,15 +350,15 @@ fn clear_around(passable: &mut [bool], cx: u8, cy: u8, radius: i32) {
 
 /// Stamp a small ore cluster at `(cx, cy)` *and* its point-mirror image, so
 /// the map stays exactly symmetric.
-fn stamp_ore_cluster_symmetric(ore: &mut [i32], passable: &mut [bool], cx: u8, cy: u8) {
+fn stamp_ore_cluster_amount(ore: &mut [i32], passable: &mut [bool], cx: u8, cy: u8, amount: i32) {
     for (dx, dy) in &[(0i32, 0i32), (1, 0), (0, 1), (1, 1), (-1, 1), (0, -1)] {
         let (x, y) = (cx as i32 + dx, cy as i32 + dy);
         if in_bounds(x, y) {
             let (x, y) = (x as u8, y as u8);
-            ore[tile_index(x, y)] = 500;
+            ore[tile_index(x, y)] = amount;
             passable[tile_index(x, y)] = true;
             let (mx, my) = (mirror(x), mirror(y));
-            ore[tile_index(mx, my)] = 500;
+            ore[tile_index(mx, my)] = amount;
             passable[tile_index(mx, my)] = true;
         }
     }

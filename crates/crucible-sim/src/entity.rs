@@ -35,10 +35,12 @@ impl Player {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Debug)]
 pub enum BuildingType {
     Hq,
+    PowerPlant,
     Refinery,
     Barracks,
     Factory,
     TechLab,
+    Airfield,
     Turret,
 }
 
@@ -98,14 +100,14 @@ pub struct BuildingStats {
     pub cost: i32,
     pub hp: i32,
     pub vision: Fix,
-    /// Passive ore trickle per tick (refinery only).
-    pub trickle: i32,
     /// Attack damage (turrets only).
     pub damage: i32,
     /// Attack range in fix units (turrets only).
     pub range: Fix,
     /// Attack cooldown in ticks (turrets only).
     pub cooldown: i32,
+    /// Power produced (positive) or consumed (negative).
+    pub power: i32,
 }
 
 const fn tiles(t: i32) -> Fix {
@@ -177,65 +179,89 @@ pub const fn building_stats(bt: BuildingType) -> BuildingStats {
             cost: 0,
             hp: 1500,
             vision: tiles(5),
-            trickle: 0,
             damage: 0,
             range: 0,
             cooldown: 0,
+            power: 50,
+        },
+        PowerPlant => BuildingStats {
+            cost: 150,
+            hp: 300,
+            vision: tiles(3),
+            damage: 0,
+            range: 0,
+            cooldown: 0,
+            power: 100,
         },
         Refinery => BuildingStats {
             cost: 300,
             hp: 400,
             vision: tiles(3),
-            trickle: 1,
             damage: 0,
             range: 0,
             cooldown: 0,
+            power: -20,
         },
         Barracks => BuildingStats {
             cost: 150,
             hp: 300,
             vision: tiles(3),
-            trickle: 0,
             damage: 0,
             range: 0,
             cooldown: 0,
+            power: -15,
         },
         Factory => BuildingStats {
             cost: 250,
             hp: 400,
             vision: tiles(3),
-            trickle: 0,
             damage: 0,
             range: 0,
             cooldown: 0,
+            power: -25,
         },
         TechLab => BuildingStats {
             cost: 200,
             hp: 250,
             vision: tiles(3),
-            trickle: 0,
             damage: 0,
             range: 0,
             cooldown: 0,
+            power: -30,
+        },
+        Airfield => BuildingStats {
+            cost: 250,
+            hp: 350,
+            vision: tiles(4),
+            damage: 0,
+            range: 0,
+            cooldown: 0,
+            power: -25,
         },
         Turret => BuildingStats {
             cost: 100,
             hp: 150,
             vision: tiles(4),
-            trickle: 0,
             damage: 12,
             range: tiles(3) + FIX_SCALE / 2,
             cooldown: TICKS_PER_SEC * 8 / 10,
+            power: -20,
         },
     }
 }
 
-/// How much ore a harvester carries per trip.
-pub const HARVESTER_CAPACITY: i32 = 50;
+/// How much ore a harvester carries per trip. Income comes only from deposits
+/// (no refinery trickle), so trips are worth enough that a small fleet carries
+/// the economy; tuned with the balance baseline. Sized so the deposit park
+/// doesn't drag match pacing past the 5–10 min band.
+pub const HARVESTER_CAPACITY: i32 = 85;
 /// Ticks a harvester spends mining to fill its hold.
-pub const HARVEST_TICKS: i32 = TICKS_PER_SEC * 5;
+pub const HARVEST_TICKS: i32 = TICKS_PER_SEC * 25 / 10;
 /// Ore extracted from a field per harvest tick.
 pub const HARVEST_RATE_PER_TICK: i32 = HARVESTER_CAPACITY / HARVEST_TICKS;
+/// Ticks a full harvester parks at the refinery dock before depositing
+/// (1.5 s at 10 ticks/s, so the unload reads visually as a deposit).
+pub const DEPOSIT_PARK_TICKS: i32 = TICKS_PER_SEC * 3 / 2;
 
 /// Which units a building can train.
 pub fn building_produces(bt: BuildingType) -> &'static [UnitType] {
@@ -243,7 +269,7 @@ pub fn building_produces(bt: BuildingType) -> &'static [UnitType] {
     use UnitType::*;
     match bt {
         Barracks => &[Infantry],
-        Factory => &[Harvester, Tank],
+        Factory => &[Harvester, Tank, Artillery],
         _ => &[],
     }
 }
@@ -322,8 +348,9 @@ pub struct Unit {
     pub carrying: i32,
     /// Attack cooldown remaining (ticks).
     pub cooldown: i32,
-    /// Mining progress accumulator (harvesters), in harvest ticks.
-    pub mining: i32,
+    /// Deposit parking progress (harvesters): ticks spent docked at the
+    /// refinery waiting to unload. 0 = not currently unloading.
+    pub park_ticks: i32,
     /// Remaining path (tile waypoints) for long-range navigation.
     pub path: Vec<(u8, u8)>,
     /// Current attack target (re-evaluated per tick).
@@ -388,8 +415,22 @@ mod tests {
         );
         assert_eq!(
             building_produces(BuildingType::Factory),
-            &[UnitType::Harvester, UnitType::Tank]
+            &[UnitType::Harvester, UnitType::Tank, UnitType::Artillery]
         );
         assert!(building_produces(BuildingType::Hq).is_empty());
+        assert!(building_produces(BuildingType::PowerPlant).is_empty());
+        assert!(building_produces(BuildingType::Airfield).is_empty());
+    }
+
+    #[test]
+    fn power_stats_balance() {
+        assert!(building_stats(BuildingType::PowerPlant).power > 0);
+        assert!(building_stats(BuildingType::Hq).power > 0);
+        assert!(building_stats(BuildingType::Refinery).power < 0);
+        assert!(building_stats(BuildingType::Barracks).power < 0);
+        assert!(building_stats(BuildingType::Factory).power < 0);
+        assert!(building_stats(BuildingType::Turret).power < 0);
+        assert!(building_stats(BuildingType::TechLab).power < 0);
+        assert!(building_stats(BuildingType::Airfield).power < 0);
     }
 }

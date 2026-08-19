@@ -1,34 +1,35 @@
-//! Economy: harvesters mine ore fields and haul it to refineries, plus the
-//! refinery passive trickle. Deterministic: nearest-neighbor choices break
-//! ties by lowest entity id / tile index. Harvesters honor manual move orders
-//! and flee from nearby enemies.
+//! Economy: harvesters mine ore fields and haul it to refineries. Income comes
+//! *only* from deposits — refineries give no passive trickle. A full harvester
+//! walks to its refinery's dock (the tile at the refinery's front), parks
+//! there for `DEPOSIT_PARK_TICKS` (1.5 s), then unloads and returns to mining.
+//! Deterministic: nearest-neighbor choices break ties by lowest entity id /
+//! tile index. Harvesters honor manual move orders and flee from nearby
+//! enemies.
 
 use crate::entity::{
-    building_stats, unit_stats, BuildingType, EntityId, UnitOrder, UnitType, HARVESTER_CAPACITY,
-    HARVEST_RATE_PER_TICK,
+    unit_stats, BuildingType, EntityId, UnitOrder, UnitType, DEPOSIT_PARK_TICKS,
+    HARVESTER_CAPACITY, HARVEST_RATE_PER_TICK,
 };
 use crate::fixed::{dist2, Pos, FIX_SCALE};
 use crate::game::Game;
 use crate::map::MAP_TILES;
 use crate::movement::step_towards;
 
+/// Fallback deposit radius when a refinery has no passable dock tile.
 const DROP_RADIUS: i32 = FIX_SCALE * 2;
+/// Distance from the dock center within which a harvester counts as docked.
+/// 1.5 tiles gives a small fleet room to park at the front simultaneously
+/// (units separate at 0.5 tiles), so the dock doesn't become a queue.
+const DOCK_RADIUS: i32 = FIX_SCALE * 3 / 2;
 const MINE_RADIUS: i32 = FIX_SCALE * 3 / 4;
-/// Radius at which harvesters flee from enemy units.
-const FLEE_RADIUS: i32 = FIX_SCALE * 4;
+/// Radius at which harvesters flee from enemy units. Deliberately tight (2
+/// tiles): income comes only from deposits, so a wide flee radius would let
+/// any nearby army shut down a base's entire economy.
+const FLEE_RADIUS: i32 = FIX_SCALE * 2;
 
 impl Game {
     /// Advance the economy for one tick.
     pub fn economy_phase(&mut self) {
-        // Refinery trickle income.
-        for i in 0..self.buildings.len() {
-            let b = &self.buildings[i];
-            if b.is_alive() && b.btype == BuildingType::Refinery {
-                let owner = b.owner;
-                self.ore[owner.index()] += building_stats(BuildingType::Refinery).trickle;
-            }
-        }
-
         let ids: Vec<EntityId> = self
             .units
             .iter()
@@ -42,6 +43,30 @@ impl Game {
         }
     }
 
+    /// The tile a harvester docks at to unload at `rid`: the refinery's front
+    /// (south side, matching the hopper sprite), falling back to the other
+    /// cardinal neighbors in a fixed order. `None` if every adjacent tile is
+    /// blocked (caller falls back to depositing from range).
+    fn refinery_dock(&self, rid: EntityId, from_pos: Pos) -> Option<(u8, u8)> {
+        let b = self.any_building(rid)?;
+        let (x, y) = (b.tile.0 as i32, b.tile.1 as i32);
+        let mut best: Option<(i64, (u8, u8))> = None;
+        for (dx, dy) in [(0, 1), (1, 0), (-1, 0), (0, -1)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < 0 || ny < 0 || nx >= 64 || ny >= 64 {
+                continue;
+            }
+            if self.map.is_passable(nx as u8, ny as u8) {
+                let tc = Pos::from_tile(nx as u8, ny as u8);
+                let d = dist2(from_pos.x, from_pos.y, tc.x, tc.y);
+                if best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, (nx as u8, ny as u8)));
+                }
+            }
+        }
+        best.map(|(_, t)| t)
+    }
+
     fn harvester_tick(&mut self, uid: EntityId, blocked: &[bool]) {
         let Some(idx) = self.units.iter().position(|u| u.id == uid) else {
             return;
@@ -52,6 +77,7 @@ impl Game {
         let order = self.units[idx].order.clone();
         let harvest_tile = self.units[idx].harvest_tile;
         let refinery = self.units[idx].refinery;
+        let park_ticks = self.units[idx].park_ticks;
         let speed = unit_stats(UnitType::Harvester).speed;
 
         // Flee check: any enemy unit nearby?
@@ -68,6 +94,7 @@ impl Game {
         let mut new_harvest_tile = harvest_tile;
         let mut new_refinery = refinery;
         let mut new_order = order.clone();
+        let mut new_park = self.units[idx].park_ticks;
         let new_fleeing;
         let mut mined: Option<(u8, u8, i32)> = None;
         let mut deposit = 0i32;
@@ -77,6 +104,7 @@ impl Game {
             let dest = self.flee_dest(owner, pos);
             let (p, _) = follow(&self.map, blocked, &mut new_path, pos, dest, speed);
             new_pos = p;
+            new_park = 0;
             new_order = UnitOrder::Flee { dest };
         } else if let UnitOrder::Move { waypoint, .. } = order {
             // Manual move: honor it, then resume harvesting.
@@ -93,17 +121,41 @@ impl Game {
                 new_refinery = target;
                 if let Some(rid) = target {
                     if let Some(b) = self.any_building(rid) {
-                        let bpos = b.pos();
-                        if dist2(pos.x, pos.y, bpos.x, bpos.y)
-                            <= (DROP_RADIUS as i64) * (DROP_RADIUS as i64)
-                        {
-                            deposit = carrying;
-                            new_carrying = 0;
-                            new_harvest_tile = None;
+                        if let Some(dock) = self.refinery_dock(rid, pos) {
+                            let dpos = Pos::from_tile(dock.0, dock.1);
+                            if dist2(pos.x, pos.y, dpos.x, dpos.y)
+                                <= (DOCK_RADIUS as i64) * (DOCK_RADIUS as i64)
+                            {
+                                // Docked at the refinery's front: park for 2 s,
+                                // then unload and go back to mining.
+                                if park_ticks >= DEPOSIT_PARK_TICKS {
+                                    deposit = carrying;
+                                    new_carrying = 0;
+                                    new_harvest_tile = None;
+                                    new_park = 0;
+                                } else {
+                                    new_park = park_ticks + 1;
+                                }
+                            } else {
+                                new_park = 0;
+                                let (p, _) =
+                                    follow(&self.map, blocked, &mut new_path, pos, dpos, speed);
+                                new_pos = p;
+                            }
                         } else {
-                            let (p, _) =
-                                follow(&self.map, blocked, &mut new_path, pos, bpos, speed);
-                            new_pos = p;
+                            // No passable dock: deposit from range as a fallback.
+                            let bpos = b.pos();
+                            if dist2(pos.x, pos.y, bpos.x, bpos.y)
+                                <= (DROP_RADIUS as i64) * (DROP_RADIUS as i64)
+                            {
+                                deposit = carrying;
+                                new_carrying = 0;
+                                new_harvest_tile = None;
+                            } else {
+                                let (p, _) =
+                                    follow(&self.map, blocked, &mut new_path, pos, bpos, speed);
+                                new_pos = p;
+                            }
                         }
                     }
                 }
@@ -138,6 +190,7 @@ impl Game {
         self.units[idx].refinery = new_refinery;
         self.units[idx].order = new_order;
         self.units[idx].fleeing = new_fleeing;
+        self.units[idx].park_ticks = new_park;
 
         if let Some((x, y, amount)) = mined {
             self.map.deplete_ore(x, y, amount);

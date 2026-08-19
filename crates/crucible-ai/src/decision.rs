@@ -9,7 +9,7 @@ use crucible_sim::{unit_stats, BuildingType, Command, Game, Player, Stance, Unit
 
 use crate::features::{extract, FeatureInput};
 use crate::network::{forward, ARMY_ACTION_OUT, BUILD_OUT, SECTOR_OUT, TECH_OUT, TRAIN_OUT};
-use crate::scripted::{combat_unit_ids, find_build_tile, is_valid_build_tile};
+use crate::scripted::{combat_unit_ids, find_build_tile};
 
 const BUILD_TYPES: [BuildingType; BUILD_OUT] = [
     BuildingType::Refinery,
@@ -85,7 +85,7 @@ pub fn decide(game: &Game, player: Player, genome: &[f32], input: &FeatureInput)
         if let Some(b) = game
             .buildings
             .iter()
-            .find(|b| b.owner == player && b.btype == producer)
+            .find(|b| b.owner == player && b.btype == producer && b.queue.len() < game.config.max_queue)
         {
             cmds.push(Command::TrainUnit {
                 player,
@@ -116,8 +116,15 @@ pub fn decide(game: &Game, player: Player, genome: &[f32], input: &FeatureInput)
         let units = combat_unit_ids(game, player);
         if !units.is_empty() {
             let target = match action {
-                ArmyAction::Defend => game.hq(player).map(|b| b.tile).unwrap_or((32, 32)),
-                ArmyAction::Attack | ArmyAction::Scout => sector_center(sector),
+                ArmyAction::Defend => input.own_hq_tile,
+                ArmyAction::Scout => sector_center(sector, input.own_hq_tile),
+                ArmyAction::Attack => {
+                    if units.len() >= 3 {
+                        (63 - input.own_hq_tile.0, 63 - input.own_hq_tile.1)
+                    } else {
+                        input.own_hq_tile
+                    }
+                }
             };
             cmds.push(Command::MoveGroup {
                 player,
@@ -167,15 +174,29 @@ fn argmax(xs: &[f32]) -> usize {
     best
 }
 
-fn sector_center(sector: usize) -> (u8, u8) {
-    let sx = sector % 8;
-    let sy = sector / 8;
+fn sector_center(sector: usize, own_hq: (u8, u8)) -> (u8, u8) {
+    let mut sx = sector % 8;
+    let mut sy = sector / 8;
+    if own_hq.0 >= 32 {
+        sx = 7 - sx;
+    }
+    if own_hq.1 >= 32 {
+        sy = 7 - sy;
+    }
     ((sx * 8 + 4) as u8, (sy * 8 + 4) as u8)
 }
 
 // --- Legality masks ---------------------------------------------------------
 
 fn build_allowed(game: &Game, p: Player, bt: BuildingType) -> bool {
+    if bt != BuildingType::Refinery
+        && !game
+            .buildings
+            .iter()
+            .any(|b| b.owner == p && b.btype == BuildingType::Refinery)
+    {
+        return false;
+    }
     if bt == BuildingType::TechLab
         && !game
             .buildings
@@ -188,19 +209,30 @@ fn build_allowed(game: &Game, p: Player, bt: BuildingType) -> bool {
     if game.ore[p.index()] < cost {
         return false;
     }
-    build_preferred(game, p, bt).is_some_and(|pref| is_valid_build_tile(game, p, bt, pref))
+    build_preferred(game, p, bt).is_some_and(|pref| find_build_tile(game, p, bt, pref).is_some())
+}
+
+fn base_offset(hq: (u8, u8), dx: i32, dy: i32) -> (u8, u8) {
+    let sx = if hq.0 < 32 { dx } else { -dx };
+    let sy = if hq.1 < 32 { dy } else { -dy };
+    (
+        (hq.0 as i32 + sx).clamp(0, 63) as u8,
+        (hq.1 as i32 + sy).clamp(0, 63) as u8,
+    )
 }
 
 fn build_preferred(game: &Game, p: Player, bt: BuildingType) -> Option<(u8, u8)> {
     let hq = game.hq(p)?;
-    let (hx, hy) = hq.tile;
+    let hq_tile = hq.tile;
     Some(match bt {
-        BuildingType::Refinery => (hx + 2, hy),
-        BuildingType::Factory => (hx, hy + 2),
-        BuildingType::Barracks => (hx + 2, hy + 2),
-        BuildingType::TechLab => (hx, hy.wrapping_sub(2)),
-        BuildingType::Turret => (hx.wrapping_sub(2), hy),
-        BuildingType::Hq => (hx, hy),
+        BuildingType::PowerPlant => base_offset(hq_tile, 0, -2),
+        BuildingType::Refinery => base_offset(hq_tile, 2, 0),
+        BuildingType::Factory => base_offset(hq_tile, 0, 2),
+        BuildingType::Barracks => base_offset(hq_tile, 2, 2),
+        BuildingType::TechLab => base_offset(hq_tile, -2, 2),
+        BuildingType::Airfield => base_offset(hq_tile, 0, 4),
+        BuildingType::Turret => base_offset(hq_tile, -2, 0),
+        BuildingType::Hq => hq_tile,
     })
 }
 

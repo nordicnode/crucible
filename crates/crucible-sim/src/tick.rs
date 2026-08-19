@@ -27,6 +27,11 @@ impl Game {
         self.apm[0].tick();
         self.apm[1].tick();
 
+        let low_power = [
+            self.has_low_power(Player::P0),
+            self.has_low_power(Player::P1),
+        ];
+
         // Cooldowns tick down.
         for u in &mut self.units {
             if u.cooldown > 0 {
@@ -35,6 +40,10 @@ impl Game {
         }
         for b in &mut self.buildings {
             if b.cooldown > 0 {
+                // Low power penalty: turret cooldown recovers at 50% rate
+                if low_power[b.owner.index()] && self.tick % 2 != 0 {
+                    continue;
+                }
                 b.cooldown -= 1;
             }
         }
@@ -94,10 +103,19 @@ impl Game {
     fn production_phase(&mut self) {
         type Spawn = (Player, UnitType, (u8, u8), Option<(u8, u8)>);
         let mut spawns: Vec<Spawn> = Vec::new();
+        let low_power = [
+            self.has_low_power(Player::P0),
+            self.has_low_power(Player::P1),
+        ];
 
         for i in 0..self.buildings.len() {
             if self.buildings[i].queue.is_empty() {
                 self.buildings[i].progress = 0;
+                continue;
+            }
+            let owner = self.buildings[i].owner;
+            // Low power penalty: unit production progresses at 50% speed
+            if low_power[owner.index()] && self.tick % 2 != 0 {
                 continue;
             }
             let utype = self.buildings[i].queue[0];
@@ -182,7 +200,7 @@ impl Game {
             order,
             carrying: 0,
             cooldown: 0,
-            mining: 0,
+            park_ticks: 0,
             path,
             target: None,
             fleeing: false,

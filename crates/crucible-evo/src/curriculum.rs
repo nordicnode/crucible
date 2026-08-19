@@ -141,9 +141,9 @@ pub struct Curriculum {
     pub pop: Population,
     pub stage: Stage,
     pub gens_in_stage: usize,
-    cfg: CurriculumConfig,
-    match_config: GameConfig,
-    shaping_config: GameConfig,
+    pub cfg: CurriculumConfig,
+    pub match_config: GameConfig,
+    pub shaping_config: GameConfig,
 }
 
 impl Curriculum {

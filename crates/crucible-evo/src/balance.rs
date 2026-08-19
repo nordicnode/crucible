@@ -51,7 +51,7 @@ fn spawn_unit(g: &mut Game, p: Player, ut: UnitType, tile: (u8, u8)) {
         order: UnitOrder::Idle,
         carrying: 0,
         cooldown: 0,
-        mining: 0,
+        park_ticks: 0,
         path: vec![],
         target: None,
         fleeing: false,

@@ -2,7 +2,7 @@
 // No game rules live here.
 
 import type { DiffEntity, OreTile } from "./types";
-import { BUILDING_KINDS, UNIT_KINDS } from "./types";
+import { BUILDING_KINDS, BUILDING_POWER, UNIT_KINDS } from "./types";
 
 export interface Entity extends DiffEntity {}
 
@@ -22,12 +22,25 @@ export class World {
   visible = new Set<number>();
   events: { tick: number; kind: string }[] = [];
   result: { winner: number | null; reason: string | null } | null = null;
+  private movingEntities = new Set<number>();
 
   get ownUnits(): Entity[] {
     return [...this.entities.values()].filter((e) => e.owner === 0 && UNIT_KINDS.has(e.kind));
   }
   get ownBuildings(): Entity[] {
     return [...this.entities.values()].filter((e) => e.owner === 0 && BUILDING_KINDS.has(e.kind));
+  }
+  get ownPower(): { produced: number; consumed: number } {
+    let produced = 0;
+    let consumed = 0;
+    for (const b of this.ownBuildings) {
+      const stats = BUILDING_POWER[b.kind];
+      if (stats) {
+        produced += stats.produces;
+        consumed += stats.consumes;
+      }
+    }
+    return { produced, consumed };
   }
   get enemyEntities(): Entity[] {
     return [...this.entities.values()].filter((e) => e.owner === 1);
@@ -68,6 +81,7 @@ export class World {
       if (!this.entities.has(id)) {
         this.display.delete(id);
         this.headings.delete(id);
+        this.movingEntities.delete(id);
       }
     }
     this.oreTiles = new Map(oreTiles.map((t) => [`${t.x},${t.y}`, t]));
@@ -92,7 +106,9 @@ export class World {
       if (!d) continue;
       const dx = e.x - d.x;
       const dy = e.y - d.y;
-      if (Math.hypot(dx, dy) > 0.01) {
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.02) {
+        this.movingEntities.add(e.id);
         const targetHeading = Math.atan2(dy, dx);
         const curHeading = this.headings.get(e.id) ?? targetHeading;
         // Shortest angular difference
@@ -100,6 +116,30 @@ export class World {
         while (diff < -Math.PI) diff += Math.PI * 2;
         while (diff > Math.PI) diff -= Math.PI * 2;
         this.headings.set(e.id, curHeading + diff * Math.min(1, f * 1.5));
+      } else {
+        this.movingEntities.delete(e.id);
+        if (e.kind === "Turret") {
+          // Find nearest enemy in combat range to aim at
+          let nearestEnemy: Entity | null = null;
+          let minDist2 = 5.0 * 5.0;
+          for (const other of this.entities.values()) {
+            if (other.owner !== e.owner && (other.hp ?? 1) > 0) {
+              const dist2 = (other.x - e.x) ** 2 + (other.y - e.y) ** 2;
+              if (dist2 <= minDist2) {
+                minDist2 = dist2;
+                nearestEnemy = other;
+              }
+            }
+          }
+          if (nearestEnemy) {
+            const targetHeading = Math.atan2(nearestEnemy.y - e.y, nearestEnemy.x - e.x);
+            const curHeading = this.headings.get(e.id) ?? targetHeading;
+            let diff = targetHeading - curHeading;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            this.headings.set(e.id, curHeading + diff * Math.min(1, f * 3));
+          }
+        }
       }
       d.x += dx * f;
       d.y += dy * f;
@@ -118,5 +158,10 @@ export class World {
   /** Current facing angle in radians of an entity. */
   heading(id: number): number {
     return this.headings.get(id) ?? 0;
+  }
+
+  /** Whether the entity is currently in active motion across the terrain. */
+  isMoving(id: number): boolean {
+    return this.movingEntities.has(id);
   }
 }

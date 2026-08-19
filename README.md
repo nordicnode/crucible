@@ -43,6 +43,21 @@ cargo run -p crucible-server
 That gives you the full game against scripted bots. For a real, evolving
 champion, start the trainer too (see *Training the AI* below).
 
+### Optional OpenHV artwork
+
+The client can use locally imported OpenHV sprite sheets for higher-resolution
+units, buildings, terrain, ore, and combat effects. OpenHV is not required to
+run Crucible; install or check out OpenHV, then run:
+
+```bash
+(cd client && npm run assets:openhv)
+```
+
+The generated `client/public/openhv/` directory is ignored by git and the
+importer never writes to the OpenHV checkout. See
+[`client/OPENHV_ASSETS.md`](client/OPENHV_ASSETS.md) for attribution and the
+per-file Creative Commons license requirements if you distribute those assets.
+
 ## How to play
 
 - **Left-click** to select; **drag a box** to select several (hold **Shift** to add).
@@ -59,7 +74,8 @@ champion, start the trainer too (see *Training the AI* below).
 
 You start with a Harvester; it mines the gold crystals and banks ore at a
 Refinery (watch the `workers` counter and the `+N/s` income readout in the
-top bar — income comes from deposits plus a small refinery trickle).
+top bar — income comes only from harvester deposits; refineries give no
+passive trickle).
 
 Destroy the enemy HQ to win. If the clock runs out, the side with more
 remaining value wins.

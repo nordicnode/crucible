@@ -112,9 +112,11 @@ pub fn army_value(g: &Game, p: Player) -> i32 {
         if b.owner == p
             && matches!(
                 b.btype,
-                BuildingType::Barracks
+                BuildingType::PowerPlant
+                    | BuildingType::Barracks
                     | BuildingType::Factory
                     | BuildingType::TechLab
+                    | BuildingType::Airfield
                     | BuildingType::Turret
             )
         {

@@ -46,6 +46,10 @@ pub enum Command {
         player: Player,
         building: EntityId,
     },
+    Repair {
+        player: Player,
+        building: EntityId,
+    },
 }
 
 impl Command {
@@ -56,7 +60,8 @@ impl Command {
             | Command::MoveGroup { player, .. }
             | Command::SetRally { player, .. }
             | Command::ChooseUpgrade { player, .. }
-            | Command::Sell { player, .. } => *player,
+            | Command::Sell { player, .. }
+            | Command::Repair { player, .. } => *player,
         }
     }
 
@@ -70,7 +75,8 @@ impl Command {
             | Command::MoveGroup { player: p, .. }
             | Command::SetRally { player: p, .. }
             | Command::ChooseUpgrade { player: p, .. }
-            | Command::Sell { player: p, .. } => *p = player,
+            | Command::Sell { player: p, .. }
+            | Command::Repair { player: p, .. } => *p = player,
         }
         c
     }
@@ -92,6 +98,7 @@ pub enum CommandError {
     RequiresFactory,
     UpgradeAlreadyChosen,
     CantSellHq,
+    BuildingFullHealth,
     EmptyGroup,
     QueueFull,
     /// Command dropped by the APM budget (rate limit).
@@ -171,6 +178,19 @@ impl Game {
                 }
                 Ok(())
             }
+            Command::Repair { player, building } => {
+                let b = self.building(*player, *building).ok_or(NotYourEntity)?;
+                if !b.is_alive() {
+                    return Err(EntityDead);
+                }
+                if b.hp >= b.max_hp {
+                    return Err(BuildingFullHealth);
+                }
+                if self.ore[player.index()] < 15 {
+                    return Err(NotEnoughOre);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -184,7 +204,7 @@ impl Game {
         if btype == BuildingType::Hq {
             return Err(NotABuilding);
         }
-        if btype == BuildingType::TechLab
+        if (btype == BuildingType::TechLab || btype == BuildingType::Airfield)
             && self.count_buildings(player, BuildingType::Factory) == 0
         {
             return Err(RequiresFactory);
@@ -244,12 +264,12 @@ impl Game {
         if units.is_empty() {
             return Err(EmptyGroup);
         }
-        self.validate_tile(waypoint)?;
         for id in units {
             if self.unit(player, *id).is_none() {
                 return Err(NotYourEntity);
             }
         }
+        self.validate_tile(waypoint)?;
         Ok(())
     }
 

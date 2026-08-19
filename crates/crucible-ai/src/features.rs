@@ -34,6 +34,7 @@ pub struct FeatureInput {
     pub upgrade: Upgrade,
     pub own_units: Vec<UnitType>,
     pub own_buildings: Vec<OwnBuilding>,
+    pub own_hq_tile: (u8, u8),
     pub fog: FogView,
 }
 
@@ -57,12 +58,17 @@ impl FeatureInput {
                 max_hp: b.max_hp,
             })
             .collect();
+        let own_hq_tile = game
+            .hq(player)
+            .map(|b| b.tile)
+            .unwrap_or(game.map.hq_tiles[player.index()]);
         FeatureInput {
             tick: game.tick,
             ore: game.ore[player.index()],
             upgrade: game.upgrades[player.index()],
             own_units,
             own_buildings,
+            own_hq_tile,
             fog: game.fog_view(player),
         }
     }
@@ -147,19 +153,26 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
         let w = decay(tick, m.last_seen);
         let idx = match m.btype {
             BuildingType::Hq => 15,
-            BuildingType::Refinery => 16,
+            BuildingType::Refinery | BuildingType::PowerPlant => 16,
             BuildingType::Factory => 17,
             BuildingType::Barracks => 18,
-            BuildingType::TechLab => 19,
+            BuildingType::TechLab | BuildingType::Airfield => 19,
             BuildingType::Turret => 20,
         };
         f[idx] = clamp01(f[idx] + w / 4.0);
     }
 
-    // Enemy building presence per 8x8 sector.
+    // Enemy building presence per 8x8 sector (oriented relative to own HQ corner).
+    let (flip_x, flip_y) = (input.own_hq_tile.0 >= 32, input.own_hq_tile.1 >= 32);
     for m in &input.fog.buildings {
-        let sx = (m.tile.0 as usize) / 8;
-        let sy = (m.tile.1 as usize) / 8;
+        let mut sx = (m.tile.0 as usize) / 8;
+        let mut sy = (m.tile.1 as usize) / 8;
+        if flip_x {
+            sx = 7 - sx;
+        }
+        if flip_y {
+            sy = 7 - sy;
+        }
         let w = decay(tick, m.last_seen);
         f[21 + sy * 8 + sx] = clamp01(f[21 + sy * 8 + sx] + w);
     }

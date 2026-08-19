@@ -1,7 +1,8 @@
-// High-detail Canvas 2D tactical renderer for Crucible:
-// Procedural vector terrain, animated ore nodes, detailed team-colored buildings,
-// rotating directional units, sci-fi selection reticles, and tactical minimap.
+// Canvas 2D tactical renderer for Crucible:
+// Integer-cell terrain, indexed pixel sprites, directional military hardware,
+// blocky combat FX, and a compact tactical minimap.
 
+import { fx } from "./fx";
 import {
   drawBuildingSprite,
   drawHealthBar,
@@ -11,19 +12,20 @@ import {
   drawSelectionReticle,
   drawUnitSprite,
 } from "./sprites";
+import { BUILDING_KINDS, BUILD_COSTS } from "./types";
 import type { Entity } from "./world";
 import { World } from "./world";
 
-const MAP = 64;
-const ZOOM_MIN = 4; // px per tile (whole map visible on a wide screen)
-const ZOOM_MAX = 96; // px per tile (close enough to read unit detail)
+export const MAP = 64;
+export const ZOOM_MIN = 4;
+export const ZOOM_MAX = 96;
 
 export class Camera {
-  cx = 32;
+  cx = 32; // World coordinate at top-left of viewport
   cy = 32;
-  zoom = 12; // pixels per tile
-  viewportW = 0;
-  viewportH = 0;
+  zoom = 18; // Pixels per world tile
+  viewportW = 800;
+  viewportH = 600;
 
   screenX(wx: number): number {
     return (wx - this.cx) * this.zoom;
@@ -37,41 +39,58 @@ export class Camera {
   worldY(sy: number): number {
     return sy / this.zoom + this.cy;
   }
-  /** Remember the viewport size and re-apply the map bounds. */
+
   setViewport(vw: number, vh: number): void {
     this.viewportW = vw;
     this.viewportH = vh;
     this.clampToMap();
   }
-  /**
-   * Keep the visible viewport inside the map. When the viewport is larger
-   * than the map (zoomed way out) the map is centered instead.
-   */
+
   clampToMap(): void {
     if (this.viewportW <= 0 || this.viewportH <= 0) return;
-    const halfW = this.viewportW / 2 / this.zoom;
-    const halfH = this.viewportH / 2 / this.zoom;
-    if (halfW * 2 >= MAP) this.cx = MAP / 2;
-    else this.cx = Math.min(MAP - halfW, Math.max(halfW, this.cx));
-    if (halfH * 2 >= MAP) this.cy = MAP / 2;
-    else this.cy = Math.min(MAP - halfH, Math.max(halfH, this.cy));
+    const viewW = this.viewportW / this.zoom;
+    const viewH = this.viewportH / this.zoom;
+
+    if (viewW >= MAP) {
+      this.cx = (MAP - viewW) / 2;
+    } else {
+      this.cx = Math.max(0, Math.min(MAP - viewW, this.cx));
+    }
+
+    if (viewH >= MAP) {
+      this.cy = (MAP - viewH) / 2;
+    } else {
+      this.cy = Math.max(0, Math.min(MAP - viewH, this.cy));
+    }
   }
-  /** Center the viewport on world point (wx, wy) at the given zoom. */
+
   focusOn(wx: number, wy: number, zoom: number, vw: number, vh: number): void {
     this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
     this.viewportW = vw;
     this.viewportH = vh;
-    // Deliberately unclamped: match start centers on the HQ even when it sits
-    // near a map edge. Pan/zoom apply the bounds from there.
-    this.cx = wx - vw / 2 / this.zoom;
-    this.cy = wy - vh / 2 / this.zoom;
+    this.cx = wx - vw / (2 * this.zoom);
+    this.cy = wy - vh / (2 * this.zoom);
   }
-  pan(dx: number, dy: number): void {
+
+  centerOn(wx: number, wy: number, vw: number, vh: number, zoom?: number): void {
+    this.focusOn(wx, wy, zoom ?? this.zoom, vw, vh);
+  }
+
+  pan(dx: number, dy: number, vw?: number, vh?: number): void {
+    if (vw != null && vh != null) {
+      this.viewportW = vw;
+      this.viewportH = vh;
+    }
     this.cx -= dx / this.zoom;
     this.cy -= dy / this.zoom;
     this.clampToMap();
   }
-  zoomAt(sx: number, sy: number, factor: number): void {
+
+  zoomAt(sx: number, sy: number, factor: number, vw?: number, vh?: number): void {
+    if (vw != null && vh != null) {
+      this.viewportW = vw;
+      this.viewportH = vh;
+    }
     const wx = this.worldX(sx);
     const wy = this.worldY(sy);
     this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.zoom * factor));
@@ -81,20 +100,57 @@ export class Camera {
   }
 }
 
+export function cameraViewRect(
+  c: Camera,
+  w: number,
+  h: number,
+): { x: number; y: number; w: number; h: number } | null {
+  const x0 = c.worldX(0);
+  const y0 = c.worldY(0);
+  const x1 = c.worldX(w);
+  const y1 = c.worldY(h);
+  const rx0 = Math.max(0, Math.min(MAP, x0));
+  const ry0 = Math.max(0, Math.min(MAP, y0));
+  const rx1 = Math.max(0, Math.min(MAP, x1));
+  const ry1 = Math.max(0, Math.min(MAP, y1));
+  if (rx1 <= rx0 || ry1 <= ry0) return null;
+  return { x: rx0, y: ry0, w: rx1 - rx0, h: ry1 - ry0 };
+}
+
 const COLORS = {
-  unexplored: "#04060a",
-  passable: "#16281c",
-  impassable: "#22272e",
-  ore: "#eab308",
-  own: "#2563eb",
-  enemy: "#dc2626",
-  selected: "#ffe27a",
+  unexplored: "#080b0c",
+  passable: "#263326",
+  impassable: "#252b2d",
+  ore: "#b88732",
+  own: "#5f8996",
+  enemy: "#a35a4e",
+  selected: "#d7bb63",
 };
+
+export interface RenderOptions {
+  waypoints?: Map<number, [number, number]>;
+  placementMode?: string | null;
+  placementCursor?: [number, number] | null;
+  drawMinimap?: boolean;
+}
 
 export class Renderer {
   camera = new Camera();
 
-  draw(ctx: CanvasRenderingContext2D, world: World, selection: Set<number>, w: number, h: number): void {
+  draw(
+    ctx: CanvasRenderingContext2D,
+    world: World,
+    selection: Set<number>,
+    w: number,
+    h: number,
+    opts: RenderOptions = {},
+  ): void {
+    this.camera.setViewport(w, h);
+    // The canvas is a display surface for integer-cell sprites, never a
+    // smoothed illustration.
+    ctx.imageSmoothingEnabled = false;
+
+    // 1. Clear background to dark void
     ctx.fillStyle = COLORS.unexplored;
     ctx.fillRect(0, 0, w, h);
 
@@ -104,13 +160,13 @@ export class Renderer {
     const x1 = Math.min(MAP - 1, Math.ceil(cam.worldX(w)));
     const y1 = Math.min(MAP - 1, Math.ceil(cam.worldY(h)));
 
-    // 1. Terrain + Fog of War
+    // 2. Terrain + Fog of War
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
         const idx = ty * MAP + tx;
         const isVis = world.visible.has(idx);
         const isExp = world.explored.has(idx);
-        if (!isVis && !isExp) continue; // Unexplored void
+        if (!isVis && !isExp) continue;
 
         const px = cam.screenX(tx);
         const py = cam.screenY(ty);
@@ -125,7 +181,7 @@ export class Renderer {
       }
     }
 
-    // 2. Ore Fields (Luminous Crystal Deposits)
+    // 3. Ore Fields
     for (const t of world.oreTiles.values()) {
       const px = cam.screenX(t.x);
       const py = cam.screenY(t.y);
@@ -134,7 +190,15 @@ export class Renderer {
       drawOreDeposit(ctx, px, py, size, t.amount, world.tick);
     }
 
-    // 3. Entities: Buildings first (so units appear on top), then units
+    // 4. Ground Layer FX: Scorch craters, tracks, wreckage
+    fx.drawGroundLayer(ctx, cam, w, h);
+
+    // 5. Waypoint destination lines
+    if (opts.waypoints && selection.size > 0) {
+      this.drawWaypoints(ctx, world, selection, opts.waypoints);
+    }
+
+    // 6. Entities: Buildings first, then units
     const drawList = [...world.entities.values()].sort((a, b) => {
       const aUnit = isUnit(a);
       const bUnit = isUnit(b);
@@ -146,9 +210,18 @@ export class Renderer {
       this.drawEntity(ctx, world, e, selection, w, h);
     }
 
-    // The radar minimap is drawn separately into the DOM sidebar canvas
-    // (`drawRadar`), so it lives in the C&C-style frame instead of floating
-    // over the map.
+    // 7. Air Layer FX: Projectiles, lasers, explosions, particles
+    fx.drawAirLayer(ctx, cam, w, h);
+
+    // 8. Building placement ghost
+    if (opts.placementMode && opts.placementCursor) {
+      this.drawPlacementGhost(ctx, opts.placementMode, opts.placementCursor, world);
+    }
+
+    // 9. Optional on-canvas Minimap
+    if (opts.drawMinimap) {
+      this.drawMinimap(ctx, world, selection, w, h);
+    }
   }
 
   private drawEntity(
@@ -166,7 +239,6 @@ export class Renderer {
     const z = cam.zoom;
     if (px < -z * 2 || py < -z * 2 || px > w + z * 2 || py > h + z * 2) return;
 
-    // Fade remembered (stale) enemy radar blips
     let isStale = false;
     let alpha = 1;
     if (e.owner === 1 && e.stale != null) {
@@ -180,9 +252,13 @@ export class Renderer {
 
     const isSelected = e.owner === 0 && selection.has(e.id);
 
+    const heading = world.heading(e.id);
+    const firingAge = fx.getFiringAge(e.id, world.tick);
+
     if (isUnit(e)) {
-      const heading = world.heading(e.id);
-      drawUnitSprite(ctx, e.kind, px, py, z, e.owner, heading, world.tick, isStale, 0);
+      fx.recordVehicleMovement(e.id, e.kind, p.x, p.y, heading);
+      const isMoving = world.isMoving(e.id);
+      drawUnitSprite(ctx, e.kind, px, py, z, e.owner, heading, world.tick, isStale, 0, firingAge, isMoving);
     } else {
       drawBuildingSprite(
         ctx,
@@ -191,20 +267,20 @@ export class Renderer {
         py,
         z,
         e.owner,
+        heading,
         world.tick,
         isStale,
         e.progress ?? 0,
         e.buildTime ?? 0,
+        firingAge,
       );
     }
 
-    // Sci-fi 4-corner Selection Reticle
     if (isSelected) {
       const reticleSize = isUnit(e) ? z * 0.9 : z * 1.15;
       drawSelectionReticle(ctx, px, py, reticleSize, world.tick);
     }
 
-    // HP Bar for own entities with HP
     if (e.owner === 0 && e.maxHp > 0) {
       const barSize = isUnit(e) ? z * 0.8 : z * 1.1;
       drawHealthBar(ctx, px, py, barSize, e.hp, e.maxHp);
@@ -213,79 +289,362 @@ export class Renderer {
     ctx.restore();
   }
 
+  private drawWaypoints(
+    ctx: CanvasRenderingContext2D,
+    world: World,
+    selection: Set<number>,
+    waypoints: Map<number, [number, number]>,
+  ): void {
+    const cam = this.camera;
+
+    for (const id of selection) {
+      const e = world.entities.get(id);
+      const wp = waypoints.get(id) ?? (e?.rally ? [e.rally[0], e.rally[1]] : undefined);
+      if (!wp) continue;
+
+      const p = world.pos(id);
+      const fromX = cam.screenX(p.x);
+      const fromY = cam.screenY(p.y);
+      const toX = cam.screenX(wp[0] + 0.5);
+      const toY = cam.screenY(wp[1] + 0.5);
+
+      const isBuilding = e && BUILDING_KINDS.has(e.kind);
+
+      ctx.save();
+      if (isBuilding) {
+        // Gold dashed line for building rally point
+        ctx.strokeStyle = "rgba(250, 204, 21, 0.75)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = -(world.tick * 0.5) % 8;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+        ctx.restore();
+
+        // Custom pixel-art tactical rally flag & beacon pip
+        this.drawRallyFlag(ctx, toX, toY, cam.zoom, world.tick);
+      } else {
+        // Cyan dashed line for unit move waypoints
+        ctx.strokeStyle = "rgba(6, 182, 212, 0.65)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = -(world.tick * 0.5) % 8;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+
+        const r = Math.max(4, Math.floor(cam.zoom * 0.25));
+        ctx.strokeStyle = "#ffe27a";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.strokeRect(Math.floor(toX - r), Math.floor(toY - r), r * 2, r * 2);
+        ctx.fillStyle = "#06b6d4";
+        ctx.fillRect(Math.floor(toX - 2), Math.floor(toY - 2), 4, 4);
+        ctx.restore();
+      }
+    }
+  }
+
+  private drawRallyFlag(ctx: CanvasRenderingContext2D, toX: number, toY: number, z: number, tick: number): void {
+  ctx.save();
+  const s = Math.max(12, Math.floor(z * 0.45));
+
+  // 1. Ground target ring & beacon pip
+  const pulse = (Math.sin(tick * 0.3) + 1) * 0.5;
+  ctx.strokeStyle = `rgba(234, 179, 8, ${0.4 + pulse * 0.4})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(toX, toY, Math.max(4, 5 + pulse * 3), 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Center target pip
+  ctx.fillStyle = "#facc15";
+  ctx.fillRect(Math.floor(toX - 2), Math.floor(toY - 2), 4, 4);
+
+  // 2. Steel flagpole mast (extends upwards from target)
+  const mastH = Math.floor(s * 1.3);
+  ctx.fillStyle = "#64748b";
+  ctx.fillRect(Math.floor(toX - 1), Math.floor(toY - mastH), 2, mastH);
+  ctx.fillStyle = "#cbd5e1";
+  ctx.fillRect(Math.floor(toX - 1), Math.floor(toY - mastH), 1, mastH);
+
+  // 3. Top flagpole beacon light (pulsing red)
+  const beacon = (tick % 6) < 3;
+  ctx.fillStyle = beacon ? "#ef4444" : "#991b1b";
+  ctx.fillRect(Math.floor(toX - 2), Math.floor(toY - mastH - 3), 4, 3);
+  if (beacon) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(Math.floor(toX - 1), Math.floor(toY - mastH - 2), 2, 1);
+  }
+
+  // 4. Triangular fluttering golden rally flag
+  const wave = Math.sin(tick * 0.4) > 0 ? 1 : 0;
+  const flagW = Math.max(10, Math.floor(s * 0.75));
+  const flagTop = Math.floor(toY - mastH);
+
+  ctx.fillStyle = "#eab308";
+  ctx.fillRect(Math.floor(toX + 1), flagTop, flagW, 2);
+  ctx.fillRect(Math.floor(toX + 1), flagTop + 2, flagW - 2 - wave, 2);
+  ctx.fillRect(Math.floor(toX + 1), flagTop + 4, flagW - 5 - wave, 2);
+  ctx.fillRect(Math.floor(toX + 1), flagTop + 6, Math.max(2, flagW - 8), 2);
+
+  // Gold highlight & chevron stripe on flag
+  ctx.fillStyle = "#fef08a";
+  ctx.fillRect(Math.floor(toX + 2), flagTop + 1, flagW - 2, 1);
+  ctx.fillStyle = "#ca8a04";
+  ctx.fillRect(Math.floor(toX + 3), flagTop + 2, 2, 4);
+
+  ctx.restore();
 }
 
-/**
- * Draw the tactical radar into a dedicated DOM canvas (the C&C-style frame in
- * the sidebar). `vw`/`vh` are the main viewport dimensions used to compute the
- * camera viewport rectangle.
- */
+  private drawPlacementGhost(
+    ctx: CanvasRenderingContext2D,
+    btype: string,
+    cursor: [number, number],
+    world: World,
+  ): void {
+    const cam = this.camera;
+    const px = cam.screenX(cursor[0] + 0.5);
+    const py = cam.screenY(cursor[1] + 0.5);
+    const placable = isBuildingPlacable(btype, cursor, world);
+
+    ctx.save();
+    ctx.globalAlpha = placable ? 0.75 : 0.45;
+    drawBuildingSprite(ctx, btype, px, py, cam.zoom, 0, 0, world.tick);
+
+    const rx = cam.screenX(cursor[0]);
+    const ry = cam.screenY(cursor[1]);
+
+    if (placable) {
+      ctx.fillStyle = "rgba(34, 197, 94, 0.18)";
+      ctx.fillRect(rx, ry, cam.zoom, cam.zoom);
+      ctx.strokeStyle = "#22c55e";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rx, ry, cam.zoom, cam.zoom);
+    } else {
+      ctx.fillStyle = "rgba(239, 68, 68, 0.25)";
+      ctx.fillRect(rx, ry, cam.zoom, cam.zoom);
+      ctx.strokeStyle = "#ef4444";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rx, ry, cam.zoom, cam.zoom);
+
+      // Red X across unplacable tile
+      ctx.beginPath();
+      ctx.moveTo(rx + 2, ry + 2);
+      ctx.lineTo(rx + cam.zoom - 2, ry + cam.zoom - 2);
+      ctx.moveTo(rx + cam.zoom - 2, ry + 2);
+      ctx.lineTo(rx + 2, ry + cam.zoom - 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawMinimap(
+    ctx: CanvasRenderingContext2D,
+    world: World,
+    selection: Set<number>,
+    w: number,
+    h: number,
+  ): void {
+    const s = 3.5;
+    const ox = 12;
+    const oy = h - MAP * s - 12;
+
+    ctx.fillStyle = "rgba(10, 14, 18, 0.92)";
+    ctx.fillRect(ox - 3, oy - 3, MAP * s + 6, MAP * s + 6);
+    ctx.strokeStyle = "#334155";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(ox - 3, oy - 3, MAP * s + 6, MAP * s + 6);
+
+    for (let ty = 0; ty < MAP; ty++) {
+      for (let tx = 0; tx < MAP; tx++) {
+        const idx = ty * MAP + tx;
+        if (world.visible.has(idx)) {
+          ctx.fillStyle = world.passable[idx] ? COLORS.passable : COLORS.impassable;
+        } else if (world.explored.has(idx)) {
+          ctx.fillStyle = world.passable[idx] ? "#172119" : "#1b2022";
+        } else {
+          continue;
+        }
+        ctx.fillRect(ox + tx * s, oy + ty * s, s, s);
+      }
+    }
+
+    ctx.fillStyle = COLORS.ore;
+    for (const t of world.oreTiles.values()) {
+      if (t.amount > 0) {
+        ctx.fillRect(ox + t.x * s, oy + t.y * s, s, s);
+      }
+    }
+
+    for (const e of world.entities.values()) {
+      const p = world.pos(e.id);
+      const isSel = selection.has(e.id);
+      ctx.fillStyle = isSel ? COLORS.selected : e.owner === 0 ? COLORS.own : COLORS.enemy;
+      const dotSize = isUnit(e) ? 2 : 3;
+      ctx.fillRect(ox + Math.floor(p.x * s) - 1, oy + Math.floor(p.y * s) - 1, dotSize, dotSize);
+    }
+
+    // Accurate Viewport Box
+    const vr = cameraViewRect(this.camera, w, h);
+    if (vr) {
+      ctx.strokeStyle = "rgba(255, 226, 122, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(ox + vr.x * s, oy + vr.y * s, vr.w * s, vr.h * s);
+      ctx.fillStyle = "rgba(255, 226, 122, 0.1)";
+      ctx.fillRect(ox + vr.x * s, oy + vr.y * s, vr.w * s, vr.h * s);
+    }
+  }
+
+  minimapToWorld(sx: number, sy: number, _w: number, h: number): [number, number] | null {
+    const s = 3.5;
+    const ox = 12;
+    const oy = h - MAP * s - 12;
+    if (sx >= ox && sx <= ox + MAP * s && sy >= oy && sy <= oy + MAP * s) {
+      return [(sx - ox) / s, (sy - oy) / s];
+    }
+    return null;
+  }
+}
+
+/** Render tactical Radar Surveillance panel */
 export function drawRadar(
   ctx: CanvasRenderingContext2D,
   world: World,
-  cam: Camera,
   selection: Set<number>,
-  vw: number,
-  vh: number,
+  camera: Camera,
+  w: number,
+  h: number,
 ): void {
-  const W = ctx.canvas.width;
-  const H = ctx.canvas.height;
-  const s = Math.min(W / MAP, H / MAP);
-  const ox = (W - MAP * s) / 2;
-  const oy = (H - MAP * s) / 2;
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = "#080b0c";
+  ctx.fillRect(0, 0, w, h);
 
-  // Steel-dark radar screen: unexplored reads as a panel, not black void.
-  ctx.fillStyle = "#131b24";
-  ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = "#0e141c";
-  ctx.fillRect(ox, oy, MAP * s, MAP * s);
+  const s = Math.min(w, h) / MAP;
+  const ox = (w - MAP * s) / 2;
+  const oy = (h - MAP * s) / 2;
 
+  // 1. Terrain tiles
   for (let ty = 0; ty < MAP; ty++) {
     for (let tx = 0; tx < MAP; tx++) {
       const idx = ty * MAP + tx;
       if (world.visible.has(idx)) {
-        ctx.fillStyle = world.passable[idx] ? "#284d33" : "#3a4654";
+        ctx.fillStyle = world.passable[idx] ? COLORS.passable : COLORS.impassable;
       } else if (world.explored.has(idx)) {
-        ctx.fillStyle = world.passable[idx] ? "#16271c" : "#1c242e";
+        ctx.fillStyle = world.passable[idx] ? "#172119" : "#1b2022";
       } else {
-        ctx.fillStyle = "#101720";
+        continue;
       }
       ctx.fillRect(ox + tx * s, oy + ty * s, Math.ceil(s), Math.ceil(s));
     }
   }
 
-  // Ore fields: bright gold dots.
+  // 2. Ore fields
+  ctx.fillStyle = COLORS.ore;
   for (const t of world.oreTiles.values()) {
     if (t.amount > 0) {
-      ctx.fillStyle = "#ffd75e";
-      ctx.fillRect(ox + t.x * s, oy + t.y * s, Math.max(1, Math.ceil(s)), Math.max(1, Math.ceil(s)));
+      ctx.fillRect(ox + t.x * s, oy + t.y * s, Math.max(2, s), Math.max(2, s));
     }
   }
 
-  // Entities: own = blue, enemy = red, selected = gold.
+  // 3. Entities
   for (const e of world.entities.values()) {
     const p = world.pos(e.id);
-    const isSel = selection.has(e.id);
-    ctx.fillStyle = isSel ? COLORS.selected : e.owner === 0 ? COLORS.own : COLORS.enemy;
-    const dot = isUnit(e) ? 2 : 3;
-    ctx.fillRect(ox + Math.floor(p.x * s) - 1, oy + Math.floor(p.y * s) - 1, dot, dot);
+    const isSel = selection.has(e.id);      ctx.fillStyle = isSel ? COLORS.selected : e.owner === 0 ? COLORS.own : COLORS.enemy;
+    const dotSize = isUnit(e) ? Math.max(2, s) : Math.max(3, s * 1.5);
+    ctx.fillRect(ox + p.x * s - dotSize / 2, oy + p.y * s - dotSize / 2, dotSize, dotSize);
   }
 
-  // Camera viewport rectangle.
-  const px = (cam.worldX(0) / MAP) * (MAP * s);
-  const py = (cam.worldY(0) / MAP) * (MAP * s);
-  const pw = Math.min(MAP * s, (vw / cam.zoom) * s);
-  const ph = Math.min(MAP * s, (vh / cam.zoom) * s);
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(ox + Math.max(0, px), oy + Math.max(0, py), Math.max(2, pw), Math.max(2, ph));
+  // 4. Accurate Camera Viewport Box
+  const vr = cameraViewRect(camera, window.innerWidth, window.innerHeight);
+  if (vr) {
+    ctx.strokeStyle = "rgba(255, 226, 122, 0.9)";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(ox + vr.x * s, oy + vr.y * s, Math.max(4, vr.w * s), Math.max(4, vr.h * s));
+    ctx.fillStyle = "rgba(255, 226, 122, 0.12)";
+    ctx.fillRect(ox + vr.x * s, oy + vr.y * s, Math.max(4, vr.w * s), Math.max(4, vr.h * s));
+  }
 
-  // Scanline sheen for the radar feel.
-  ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
-  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+  // 5. Radar sweep animation
+  const sweepAngle = (performance.now() * 0.002) % (Math.PI * 2);
+  const cx = ox + (MAP * s) / 2;
+  const cy = oy + (MAP * s) / 2;
+  const sweepLen = (MAP * s) * 0.7;
+  ctx.strokeStyle = "rgba(6, 182, 212, 0.4)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.cos(sweepAngle) * sweepLen, cy + Math.sin(sweepAngle) * sweepLen);
+  ctx.stroke();
+
+  // 6. Grid lines
+  ctx.strokeStyle = "rgba(71, 85, 105, 0.35)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ox, oy, MAP * s, MAP * s);
+  ctx.beginPath();
+  ctx.moveTo(ox, cy);
+  ctx.lineTo(ox + MAP * s, cy);
+  ctx.moveTo(cx, oy);
+  ctx.lineTo(cx, oy + MAP * s);
+  ctx.stroke();
 }
 
 function isUnit(e: Entity): boolean {
   return ["Harvester", "Infantry", "Tank", "Artillery"].includes(e.kind);
+}
+
+export function isBuildingPlacable(
+  btype: string,
+  tile: [number, number],
+  world: World,
+): boolean {
+  const [tx, ty] = tile;
+  if (tx < 0 || tx >= MAP || ty < 0 || ty >= MAP) return false;
+  const idx = ty * MAP + tx;
+  if (world.passable.length > 0 && !world.passable[idx]) return false;
+
+  // Check if tile has an existing building
+  for (const e of world.entities.values()) {
+    if (BUILDING_KINDS.has(e.kind)) {
+      if (Math.floor(e.x) === tx && Math.floor(e.y) === ty) {
+        return false;
+      }
+    }
+  }
+
+  // Check if tile has ore
+  const ore = world.oreTiles.get(`${tx},${ty}`);
+  if (ore && ore.amount > 0) return false;
+
+  // Check distance to nearest own building (within 5 tiles Euclidean)
+  const PLACE_RADIUS_SQ = 25; // 5^2
+  let nearOwn = false;
+  for (const b of world.ownBuildings) {
+    const bx = Math.floor(b.x);
+    const by = Math.floor(b.y);
+    const d2 = (bx - tx) * (bx - tx) + (by - ty) * (by - ty);
+    if (d2 <= PLACE_RADIUS_SQ) {
+      nearOwn = true;
+      break;
+    }
+  }
+  if (!nearOwn && world.ownBuildings.length > 0) {
+    return false;
+  }
+
+  // TechLab and Airfield require a Factory
+  if (btype === "TechLab" || btype === "Airfield") {
+    const hasFactory = world.ownBuildings.some((b) => b.kind === "Factory");
+    if (!hasFactory) return false;
+  }
+
+  // Check if player has enough ore
+  const cost = BUILD_COSTS[btype] ?? 0;
+  if (world.ore < cost) return false;
+
+  return true;
 }
 

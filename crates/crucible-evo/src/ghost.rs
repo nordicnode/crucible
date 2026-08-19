@@ -148,6 +148,10 @@ impl Ghost {
                 player,
                 building: at(building)?,
             }),
+            Repair { building, .. } => Some(Repair {
+                player,
+                building: at(building)?,
+            }),
         }
     }
 }

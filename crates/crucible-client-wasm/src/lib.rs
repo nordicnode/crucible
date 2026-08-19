@@ -91,10 +91,14 @@ pub fn replay_frame(replay_json: &str, tick: i32) -> String {
             })
         })
         .collect();
+    let (p0_prod, p0_cons) = game.power(crucible_sim::Player::P0);
+    let (p1_prod, p1_cons) = game.power(crucible_sim::Player::P1);
     serde_json::json!({
         "tick": game.tick,
         "ore0": game.ore[0],
         "ore1": game.ore[1],
+        "power0": [p0_prod, p0_cons],
+        "power1": [p1_prod, p1_cons],
         "units": units,
         "buildings": buildings,
         "winner": game.winner.map(|p| p.index() as u8),

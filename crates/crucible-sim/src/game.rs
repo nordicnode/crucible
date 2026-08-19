@@ -278,6 +278,29 @@ impl Game {
         best.map(|(_, _, p)| p).unwrap_or(pos)
     }
 
+    /// Return (power_produced, power_consumed) for a given player.
+    pub fn power(&self, player: Player) -> (i32, i32) {
+        let mut produced = 0;
+        let mut consumed = 0;
+        for b in &self.buildings {
+            if b.owner == player && b.is_alive() {
+                let stats = crate::entity::building_stats(b.btype);
+                if stats.power > 0 {
+                    produced += stats.power;
+                } else if stats.power < 0 {
+                    consumed += -stats.power;
+                }
+            }
+        }
+        (produced, consumed)
+    }
+
+    /// True if a player's power consumption exceeds their power production.
+    pub fn has_low_power(&self, player: Player) -> bool {
+        let (prod, cons) = self.power(player);
+        cons > prod
+    }
+
     /// Validate and apply a batch of commands for one player. Returns a
     /// per-command result so the server can report exactly which were dropped
     /// and why. Commands are applied in the order given; APM budget is shared
@@ -405,6 +428,22 @@ impl Game {
                     });
                     let id = *building;
                     self.buildings.retain(|b| b.id != id);
+                }
+            }
+            Command::Repair { building, .. } => {
+                let cost = 15;
+                if self.ore[player.index()] >= cost {
+                    if let Some(pos) = self
+                        .buildings
+                        .iter()
+                        .position(|b| b.id == *building && b.owner == player && b.is_alive())
+                    {
+                        if self.buildings[pos].hp < self.buildings[pos].max_hp {
+                            self.ore[player.index()] -= cost;
+                            let max_hp = self.buildings[pos].max_hp;
+                            self.buildings[pos].hp = (self.buildings[pos].hp + 100).min(max_hp);
+                        }
+                    }
                 }
             }
         }
@@ -591,5 +630,73 @@ mod tests {
             )
             .remove(0);
         assert_eq!(err, Err(CommandError::NotYourEntity));
+    }
+
+    #[test]
+    fn power_calculation_and_low_power_production() {
+        let mut g = game();
+        // Initial state: HQ gives +50 power, 0 consumed
+        assert_eq!(g.power(Player::P0), (50, 0));
+        assert!(!g.has_low_power(Player::P0));
+
+        let hq = g.hq(Player::P0).unwrap().tile;
+        // Place a PowerPlant (+100 power)
+        g.apply_commands(
+            Player::P0,
+            &[Command::PlaceBuilding {
+                player: Player::P0,
+                btype: BuildingType::PowerPlant,
+                tile: (hq.0 + 1, hq.1),
+            }],
+        );
+        assert_eq!(g.power(Player::P0), (150, 0));
+
+        // Place a Refinery (-20 power)
+        g.apply_commands(
+            Player::P0,
+            &[Command::PlaceBuilding {
+                player: Player::P0,
+                btype: BuildingType::Refinery,
+                tile: (hq.0 + 2, hq.1),
+            }],
+        );
+        assert_eq!(g.power(Player::P0), (150, 20));
+        assert!(!g.has_low_power(Player::P0));
+    }
+
+    #[test]
+    fn repair_building_restores_hp_and_costs_ore() {
+        let mut g = game();
+        let hq_id = g.hq(Player::P0).unwrap().id;
+
+        // Full health repair rejected
+        let err = g
+            .apply_commands(
+                Player::P0,
+                &[Command::Repair {
+                    player: Player::P0,
+                    building: hq_id,
+                }],
+            )
+            .remove(0);
+        assert_eq!(err, Err(CommandError::BuildingFullHealth));
+
+        // Damage the HQ
+        g.building_mut(Player::P0, hq_id).unwrap().hp = 1300;
+        let ore_before = g.ore[Player::P0.index()];
+
+        // Repair HQ (+100 HP, costs 15 ore)
+        let res = g
+            .apply_commands(
+                Player::P0,
+                &[Command::Repair {
+                    player: Player::P0,
+                    building: hq_id,
+                }],
+            )
+            .remove(0);
+        assert_eq!(res, Ok(()));
+        assert_eq!(g.building(Player::P0, hq_id).unwrap().hp, 1400);
+        assert_eq!(g.ore[Player::P0.index()], ore_before - 15);
     }
 }

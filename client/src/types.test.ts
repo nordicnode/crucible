@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { placeBuilding, trainUnit, type Command } from "./types";
+import { placeBuilding, repair, sell, trainUnit, type Command } from "./types";
 
 // The server deserializes commands with serde: `Player` is a fieldless enum,
 // so `player` must be the variant name string ("P0"), NOT an index (0).
@@ -26,5 +26,17 @@ describe("command wire format", () => {
     expect(JSON.stringify(cmd)).toBe(
       '{"TrainUnit":{"player":"P0","building":4,"utype":"Infantry"}}',
     );
+  });
+
+  it("serializes PlaceBuilding with PowerPlant", () => {
+    const cmd: Command = placeBuilding("PowerPlant", [10, 12]);
+    expect(JSON.stringify(cmd)).toBe(
+      '{"PlaceBuilding":{"player":"P0","btype":"PowerPlant","tile":[10,12]}}',
+    );
+  });
+
+  it("serializes Sell and Repair commands", () => {
+    expect(JSON.stringify(sell(3))).toBe('{"Sell":{"player":"P0","building":3}}');
+    expect(JSON.stringify(repair(3))).toBe('{"Repair":{"player":"P0","building":3}}');
   });
 });
