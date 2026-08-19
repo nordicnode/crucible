@@ -91,6 +91,7 @@ export type ServerMsg =
       visible: number[];
       events: DiffEvent[];
     }
+  | { type: "commandRejected"; index: number; reason: string }
   | { type: "matchEnd"; winner: number | null; reason: string | null; durationTicks: number; replayId: number | null };
 
 export type ClientMsg =

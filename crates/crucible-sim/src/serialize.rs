@@ -105,7 +105,8 @@ pub fn replay_to_game(replay: &Replay) -> Game {
 pub fn finish_replay(replay: &Replay) -> Game {
     let mut game = replay_to_game(replay);
     let mut guard = 0;
-    while !game.is_over() && guard < crate::fixed::MATCH_TIMEOUT_TICKS + 1000 {
+    let max_steps = replay.config.timeout_ticks.max(0).saturating_add(1000);
+    while !game.is_over() && guard < max_steps {
         game.step();
         guard += 1;
     }
@@ -243,5 +244,23 @@ mod tests {
             snapshot_bytes(&finished),
             "replay_at_tick at the end must equal finish_replay"
         );
+    }
+
+    #[test]
+    fn finish_replay_honors_timeout_above_the_default_cap() {
+        let timeout = crate::fixed::MATCH_TIMEOUT_TICKS + 1_500;
+        let replay = Replay::new(
+            17,
+            GameConfig {
+                timeout_ticks: timeout,
+                ..GameConfig::default()
+            },
+        );
+
+        let finished = finish_replay(&replay);
+
+        assert!(finished.is_over());
+        assert_eq!(finished.tick, timeout);
+        assert_eq!(finished.win_reason, Some(WinReason::Timeout));
     }
 }

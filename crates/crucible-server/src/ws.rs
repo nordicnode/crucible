@@ -23,6 +23,12 @@ use crucible_sim::{
 
 use crate::store::Store;
 
+const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
+const MAX_COMMANDS_PER_MESSAGE: usize = 8;
+const MAX_MOVE_GROUP_UNITS: usize = 32;
+const MAX_MOVE_GROUP_UNITS_PER_BATCH: usize = 64;
+const COMMAND_CHANNEL_CAPACITY: usize = 4;
+
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ClientMsg {
@@ -35,6 +41,7 @@ enum ClientMsg {
 enum ServerMsg {
     MatchStart(MatchStartMsg),
     StateDiff(StateDiffMsg),
+    CommandRejected(CommandRejectedMsg),
     MatchEnd(MatchEndMsg),
 }
 
@@ -67,6 +74,13 @@ struct MatchEndMsg {
     reason: Option<crucible_sim::WinReason>,
     duration_ticks: i32,
     replay_id: Option<i64>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CommandRejectedMsg {
+    index: usize,
+    reason: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -120,7 +134,8 @@ pub async fn handler(
     ws: WebSocketUpgrade,
     State(state): State<crate::AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle(socket, state))
+    ws.max_message_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle(socket, state))
 }
 
 async fn handle(socket: WebSocket, state: crate::AppState) {
@@ -170,13 +185,19 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
         .await?;
 
     // Incoming commands are buffered on a channel by a reader task.
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<Command>>();
+    let (tx, mut rx) = mpsc::channel::<Vec<Command>>(COMMAND_CHANNEL_CAPACITY);
     tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             if let Message::Text(t) = msg {
                 match serde_json::from_str::<ClientMsg>(&t) {
                     Ok(ClientMsg::Commands { cmds }) => {
-                        let _ = tx.send(cmds);
+                        if !command_batch_is_bounded(&cmds) {
+                            tracing::warn!("dropping oversized command batch");
+                            continue;
+                        }
+                        if tx.try_send(cmds).is_err() {
+                            tracing::warn!("dropping command batch: pending input limit reached");
+                        }
                     }
                     Ok(ClientMsg::JoinMatch { .. }) => {}
                     // Never drop a malformed command silently: a wire-format
@@ -189,7 +210,7 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
     });
 
     let mut pending: Vec<Command> = Vec::new();
-    let mut last_event_tick = 0i32;
+    let mut last_event_tick = -1i32;
     let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
 
     loop {
@@ -216,7 +237,23 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
         for c in &human_cmds {
             replay.record(game.tick, Player::P0, c.clone());
         }
-        game.apply_commands(Player::P0, &human_cmds);
+        for (index, result) in game
+            .apply_commands(Player::P0, &human_cmds)
+            .into_iter()
+            .enumerate()
+        {
+            if let Err(reason) = result {
+                sender
+                    .send(Message::Text(
+                        serde_json::to_string(&ServerMsg::CommandRejected(CommandRejectedMsg {
+                            index,
+                            reason: reason.to_string(),
+                        }))?
+                        .into(),
+                    ))
+                    .await?;
+            }
+        }
 
         game.step();
 
@@ -369,31 +406,16 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
     let events: Vec<DiffEvent> = game
         .events
         .iter()
-        .filter(|e| e.tick > *last_event_tick)
-        .map(|e| {
-            let player = match &e.kind {
-                crucible_sim::EventKind::BuildingPlaced { player, .. }
-                | crucible_sim::EventKind::UnitTrained { player, .. }
-                | crucible_sim::EventKind::OreDeposited { player, .. }
-                | crucible_sim::EventKind::Sold { player, .. }
-                | crucible_sim::EventKind::UpgradeChosen { player, .. } => {
-                    Some(player.index() as u8)
-                }
-                crucible_sim::EventKind::UnitDied { owner, .. }
-                | crucible_sim::EventKind::BuildingDestroyed { owner, .. } => {
-                    Some(owner.index() as u8)
-                }
-            };
-            DiffEvent {
-                tick: e.tick,
-                kind: event_kind(&e.kind),
-                amount: match &e.kind {
-                    crucible_sim::EventKind::OreDeposited { amount, .. } => Some(*amount),
-                    crucible_sim::EventKind::Sold { refund, .. } => Some(*refund),
-                    _ => None,
-                },
-                player,
-            }
+        .filter(|e| e.tick > *last_event_tick && event_player(&e.kind) == Some(Player::P0))
+        .map(|e| DiffEvent {
+            tick: e.tick,
+            kind: event_kind(&e.kind),
+            amount: match &e.kind {
+                crucible_sim::EventKind::OreDeposited { amount, .. } => Some(*amount),
+                crucible_sim::EventKind::Sold { refund, .. } => Some(*refund),
+                _ => None,
+            },
+            player: event_player(&e.kind).map(|player| player.index() as u8),
         })
         .collect();
     *last_event_tick = game.tick;
@@ -409,6 +431,37 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
         visible,
         events,
     })
+}
+
+fn event_player(event: &crucible_sim::EventKind) -> Option<Player> {
+    match event {
+        crucible_sim::EventKind::BuildingPlaced { player, .. }
+        | crucible_sim::EventKind::UnitTrained { player, .. }
+        | crucible_sim::EventKind::OreDeposited { player, .. }
+        | crucible_sim::EventKind::Sold { player, .. }
+        | crucible_sim::EventKind::UpgradeChosen { player, .. } => Some(*player),
+        crucible_sim::EventKind::UnitDied { owner, .. }
+        | crucible_sim::EventKind::BuildingDestroyed { owner, .. } => Some(*owner),
+    }
+}
+
+fn command_batch_is_bounded(cmds: &[Command]) -> bool {
+    if cmds.len() > MAX_COMMANDS_PER_MESSAGE {
+        return false;
+    }
+    let mut total_unit_ids = 0usize;
+    for cmd in cmds {
+        if let Command::MoveGroup { units, .. } = cmd {
+            if units.len() > MAX_MOVE_GROUP_UNITS {
+                return false;
+            }
+            total_unit_ids += units.len();
+            if total_unit_ids > MAX_MOVE_GROUP_UNITS_PER_BATCH {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn unit_kind(u: UnitType) -> String {
@@ -498,6 +551,56 @@ fn timeout_override(mut config: GameConfig) -> GameConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crucible_sim::{EventKind, GameEvent, Stance};
+
+    #[test]
+    fn command_batches_have_strict_size_limits() {
+        let oversized_group = Command::MoveGroup {
+            player: Player::P0,
+            units: vec![1; MAX_MOVE_GROUP_UNITS + 1],
+            waypoint: (1, 1),
+            stance: Stance::Aggressive,
+        };
+        assert!(!command_batch_is_bounded(&[oversized_group]));
+
+        let small_move = Command::MoveGroup {
+            player: Player::P0,
+            units: vec![1, 2],
+            waypoint: (1, 1),
+            stance: Stance::Aggressive,
+        };
+        assert!(command_batch_is_bounded(&[small_move]));
+    }
+
+    #[test]
+    fn state_diff_excludes_enemy_events() {
+        let mut game = Game::new(Map::generate(4), GameConfig::default());
+        game.events = vec![
+            GameEvent {
+                tick: 1,
+                kind: EventKind::UnitTrained {
+                    player: Player::P0,
+                    utype: UnitType::Infantry,
+                    tile: (1, 1),
+                },
+            },
+            GameEvent {
+                tick: 1,
+                kind: EventKind::UpgradeChosen {
+                    player: Player::P1,
+                    upgrade: crucible_sim::Upgrade::Damage,
+                },
+            },
+        ];
+
+        let mut last_event_tick = -1;
+        let ServerMsg::StateDiff(diff) = build_diff(&game, &mut last_event_tick) else {
+            panic!("expected a state diff");
+        };
+        assert_eq!(diff.events.len(), 1);
+        assert_eq!(diff.events[0].player, Some(0));
+        assert_eq!(diff.events[0].kind, "trained:infantry");
+    }
 
     #[test]
     fn resolve_opponent_scripted_and_fallback() {

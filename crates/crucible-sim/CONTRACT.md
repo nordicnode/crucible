@@ -91,6 +91,8 @@ Reordering these changes determinism and requires a golden-hash update.
   `PLACE_RADIUS_TILES` (5) of the *nearest own building* — bases grow in
   connected clumps, not scattered structures; artillery production requires a
   Tech Lab; Tech Lab placement requires a Factory; the upgrade is chosen once.
+- A match may end as a draw (`winner = null`): simultaneous HQ destruction and
+  equal remaining value at timeout are side-neutral terminal results.
 
 ## 5. Fog-of-war contract
 
@@ -99,7 +101,9 @@ Reordering these changes determinism and requires a golden-hash update.
   remembered enemy units/buildings with `last_seen` ticks, and known ore tiles.
   It cannot contain a live hidden entity.
 - `Game::fog_phase` runs each tick and maintains `FogMemory` in serialized
-  state; remembered positions decay (dropped after 60 s unseen).
+  state; remembered positions decay (dropped after 60 s unseen). Hidden
+  entity death is never consulted to prune memory; memory is removed only by
+  expiry or by re-observing the remembered location.
 
 ## 6. Serialization & replay contract
 

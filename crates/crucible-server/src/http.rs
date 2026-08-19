@@ -131,6 +131,16 @@ pub async fn report(
     State(state): State<AppState>,
     Path((old, new)): Path<(i64, i64)>,
 ) -> impl IntoResponse {
+    let _permit = match state.diagnostics.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "another diagnostic simulation is already running",
+            )
+                .into_response()
+        }
+    };
     let store = &state.store;
     let old_w = match store.get_genome_weights(old) {
         Ok(Some(w)) => w,
@@ -149,8 +159,14 @@ pub async fn report(
         timeout_ticks: 900,
         ..crucible_sim::GameConfig::default()
     };
-    let report = crucible_evo::change_report(&old_w, &new_w, &seeds, &cfg);
-    Json(json!({ "report": report })).into_response()
+    match tokio::task::spawn_blocking(move || {
+        crucible_evo::change_report(&old_w, &new_w, &seeds, &cfg)
+    })
+    .await
+    {
+        Ok(report) => Json(json!({ "report": report })).into_response(),
+        Err(e) => err(format!("diagnostic task failed: {e}")).into_response(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -165,6 +181,16 @@ pub async fn autobattle(
     Path((a, b)): Path<(i64, i64)>,
     Query(q): Query<AutoBattleQuery>,
 ) -> impl IntoResponse {
+    let _permit = match state.diagnostics.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "another diagnostic simulation is already running",
+            )
+                .into_response()
+        }
+    };
     let store = &state.store;
     let wa = match store.get_genome_weights(a) {
         Ok(Some(w)) => w,
@@ -178,32 +204,43 @@ pub async fn autobattle(
     };
 
     let seed = q.seed.unwrap_or(1);
-    let cfg = GameConfig::default();
-    let mut ba = GenomeBot::new(wa);
-    let mut bb = GenomeBot::new(wb);
-    let (outcome, replay) = run_match_with_replay(seed, &cfg, &mut ba, &mut bb);
-
-    let replay_json = replay.to_json();
-    let replay_id = store
-        .save_match(
-            seed,
-            &format!("genome:{a}"),
-            &format!("genome:{b}"),
-            &format!("{:?}", outcome.outcome.winner),
-            outcome.outcome.duration_ticks,
-            &replay_json,
-        )
-        .ok();
-
-    Json(json!({
-        "seed": seed,
-        "winner": outcome.outcome.winner.map(|p| p.index() as u8),
-        "reason": outcome.outcome.reason,
-        "duration_ticks": outcome.outcome.duration_ticks,
-        "replay_id": replay_id,
-        "replay": serde_json::from_str::<Value>(&replay_json).unwrap_or(Value::Null),
-    }))
-    .into_response()
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || {
+        // Diagnostics must have a predictable CPU ceiling; live matches retain
+        // the normal configurable full-length timeout in the websocket path.
+        let cfg = GameConfig {
+            timeout_ticks: 1_800,
+            ..GameConfig::default()
+        };
+        let mut ba = GenomeBot::new(wa);
+        let mut bb = GenomeBot::new(wb);
+        let (outcome, replay) = run_match_with_replay(seed, &cfg, &mut ba, &mut bb);
+        let replay_json = replay.to_json();
+        let replay_id = store
+            .save_match(
+                seed,
+                &format!("genome:{a}"),
+                &format!("genome:{b}"),
+                &format!("{:?}", outcome.outcome.winner),
+                outcome.outcome.duration_ticks,
+                &replay_json,
+            )
+            .ok();
+        (outcome, replay_json, replay_id)
+    })
+    .await
+    {
+        Ok((outcome, replay_json, replay_id)) => Json(json!({
+            "seed": seed,
+            "winner": outcome.outcome.winner.map(|p| p.index() as u8),
+            "reason": outcome.outcome.reason,
+            "duration_ticks": outcome.outcome.duration_ticks,
+            "replay_id": replay_id,
+            "replay": serde_json::from_str::<Value>(&replay_json).unwrap_or(Value::Null),
+        }))
+        .into_response(),
+        Err(e) => err(format!("diagnostic task failed: {e}")).into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +263,7 @@ mod tests {
         AppState {
             store,
             trainer: Arc::new(crate::trainer::TrainerShared::default()),
+            diagnostics: Arc::new(tokio::sync::Semaphore::new(1)),
             started_at: std::time::Instant::now(),
         }
     }
@@ -327,15 +365,17 @@ mod tests {
         let state = AppState {
             store,
             trainer: Arc::new(crate::trainer::TrainerShared::default()),
+            diagnostics: Arc::new(tokio::sync::Semaphore::new(1)),
             started_at: std::time::Instant::now(),
         };
 
         let app = Router::new()
-            .route("/api/autobattle/{a}/{b}", get(autobattle))
+            .route("/api/autobattle/{a}/{b}", axum::routing::post(autobattle))
             .with_state(state);
         let response = app
             .oneshot(
                 axum::http::Request::builder()
+                    .method("POST")
                     .uri(format!("/api/autobattle/{a}/{b}?seed=5"))
                     .body(Body::empty())
                     .unwrap(),
@@ -348,7 +388,10 @@ mod tests {
         // Direct headless run with the same seed must agree on the winner.
         let (outcome, _replay) = run_match_with_replay(
             5,
-            &GameConfig::default(),
+            &GameConfig {
+                timeout_ticks: 1_800,
+                ..GameConfig::default()
+            },
             &mut GenomeBot::new(a_w),
             &mut GenomeBot::new(b_w),
         );

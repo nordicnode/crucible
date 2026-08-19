@@ -15,7 +15,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
@@ -28,6 +28,9 @@ use trainer::{TrainerConfig, TrainerShared};
 pub(crate) struct AppState {
     pub(crate) store: Arc<Store>,
     pub(crate) trainer: Arc<TrainerShared>,
+    /// Serializes expensive diagnostic simulations so they cannot starve live
+    /// match handling when this server is exposed beyond localhost.
+    pub(crate) diagnostics: Arc<tokio::sync::Semaphore>,
     pub(crate) started_at: std::time::Instant,
 }
 
@@ -155,6 +158,7 @@ async fn main() {
     let state = AppState {
         store,
         trainer: trainer_shared,
+        diagnostics: Arc::new(tokio::sync::Semaphore::new(1)),
         started_at: std::time::Instant::now(),
     };
 
@@ -172,8 +176,8 @@ async fn main() {
         .route("/api/museum", get(http::museum))
         .route("/api/status", get(http::status))
         .route("/api/training-stats", get(http::training_stats))
-        .route("/api/report/{old}/{new}", get(http::report))
-        .route("/api/autobattle/{a}/{b}", get(http::autobattle))
+        .route("/api/report/{old}/{new}", post(http::report))
+        .route("/api/autobattle/{a}/{b}", post(http::autobattle))
         .route("/ws", get(ws::handler))
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         .with_state(state);

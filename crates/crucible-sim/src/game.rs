@@ -131,6 +131,10 @@ pub struct Game {
     pub tick: i32,
     pub winner: Option<Player>,
     pub win_reason: Option<WinReason>,
+    /// Whether the match has reached a terminal result. Kept separate from
+    /// `winner` so a legitimate draw can end the match without naming a side.
+    #[serde(default)]
+    pub over: bool,
     pub apm: [ApmBudget; 2],
     pub next_id: EntityId,
     pub events: Vec<GameEvent>,
@@ -171,6 +175,7 @@ impl Game {
             tick: 0,
             winner: None,
             win_reason: None,
+            over: false,
             apm: [
                 ApmBudget::new(config.apm_cap),
                 ApmBudget::new(config.apm_cap),
@@ -451,7 +456,9 @@ impl Game {
 
     /// True once the match has ended (timeout or HQ destruction).
     pub fn is_over(&self) -> bool {
-        self.winner.is_some()
+        // `winner` keeps snapshots produced before the explicit draw marker
+        // replayable: those snapshots ended only when a winner was present.
+        self.over || self.winner.is_some()
     }
 
     /// The command tick index (0-based) for the current game tick.
@@ -482,25 +489,28 @@ impl Game {
 
     /// Check and record the win condition. Call at the end of each tick.
     pub fn check_win(&mut self) {
-        if self.winner.is_some() {
+        if self.is_over() {
             return;
         }
         // HQ destroyed?
         let p0_dead = self.hq(Player::P0).is_none();
         let p1_dead = self.hq(Player::P1).is_none();
         if p0_dead && p1_dead {
-            self.winner = Some(Player::P0); // mutual destruction: both lose; P0 recorded as winner for determinism
+            self.winner = None;
             self.win_reason = Some(WinReason::HqDestroyed);
+            self.over = true;
             return;
         }
         if p0_dead {
             self.winner = Some(Player::P1);
             self.win_reason = Some(WinReason::HqDestroyed);
+            self.over = true;
             return;
         }
         if p1_dead {
             self.winner = Some(Player::P0);
             self.win_reason = Some(WinReason::HqDestroyed);
+            self.over = true;
             return;
         }
         // Timeout?
@@ -508,7 +518,12 @@ impl Game {
             let v0 = self.remaining_value(Player::P0);
             let v1 = self.remaining_value(Player::P1);
             self.win_reason = Some(WinReason::Timeout);
-            self.winner = Some(if v0 >= v1 { Player::P0 } else { Player::P1 });
+            self.winner = match v0.cmp(&v1) {
+                std::cmp::Ordering::Greater => Some(Player::P0),
+                std::cmp::Ordering::Less => Some(Player::P1),
+                std::cmp::Ordering::Equal => None,
+            };
+            self.over = true;
         }
     }
 }
@@ -698,5 +713,34 @@ mod tests {
         assert_eq!(res, Ok(()));
         assert_eq!(g.building(Player::P0, hq_id).unwrap().hp, 1400);
         assert_eq!(g.ore[Player::P0.index()], ore_before - 15);
+    }
+
+    #[test]
+    fn simultaneous_hq_destruction_is_a_draw() {
+        let mut g = game();
+        g.buildings.clear();
+
+        g.check_win();
+
+        assert!(g.is_over());
+        assert_eq!(g.winner, None);
+        assert_eq!(g.win_reason, Some(WinReason::HqDestroyed));
+    }
+
+    #[test]
+    fn equal_timeout_value_is_a_draw() {
+        let mut g = Game::new(
+            Map::generate(1),
+            GameConfig {
+                timeout_ticks: 0,
+                ..GameConfig::default()
+            },
+        );
+
+        g.check_win();
+
+        assert!(g.is_over());
+        assert_eq!(g.winner, None);
+        assert_eq!(g.win_reason, Some(WinReason::Timeout));
     }
 }

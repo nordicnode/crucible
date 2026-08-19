@@ -5,25 +5,30 @@ import type { ClientMsg, ServerMsg } from "./types";
 export class Net {
   private ws: WebSocket | null = null;
   private queue: ClientMsg[] = [];
-  private onMessage: ((msg: ServerMsg) => void) | null = null;
-  private onClose: (() => void) | null = null;
 
   connect(onMessage: (msg: ServerMsg) => void, onClose: () => void): void {
-    this.onMessage = onMessage;
-    this.onClose = onClose;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws = ws;
+    let notified = false;
+    const notifyClosed = (): void => {
+      if (notified || this.ws !== ws) return;
+      notified = true;
+      this.ws = null;
+      onClose();
+    };
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       for (const m of this.queue) ws.send(JSON.stringify(m));
       this.queue = [];
     };
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return;
       const msg = JSON.parse(ev.data as string) as ServerMsg;
-      this.onMessage?.(msg);
+      onMessage(msg);
     };
-    ws.onclose = () => this.onClose?.();
-    ws.onerror = () => this.onClose?.();
+    ws.onclose = notifyClosed;
+    ws.onerror = notifyClosed;
   }
 
   send(msg: ClientMsg): void {
@@ -35,6 +40,8 @@ export class Net {
   }
 
   close(): void {
-    this.ws?.close();
+    const ws = this.ws;
+    this.ws = null;
+    ws?.close();
   }
 }

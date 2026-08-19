@@ -151,10 +151,12 @@ impl Game {
                 });
             }
         }
-        // Carry forward remembered units that are still alive but not visible.
-        let live_ids: Vec<EntityId> = self.units.iter().map(|u| u.id).collect();
+        // Carry forward hidden sightings without consulting authoritative enemy
+        // state. A player may forget a unit only after the memory timeout, or
+        // after re-observing its last-known tile and seeing it is gone.
         for m in &self.fog[player.index()].units {
-            if live_ids.contains(&m.id)
+            let last_tile = m.pos.tile();
+            if !visible[tile_index(last_tile.0, last_tile.1)]
                 && !units.iter().any(|x| x.id == m.id)
                 && m.last_seen >= tick - crate::fixed::TICKS_PER_SEC * 60
             {
@@ -163,7 +165,8 @@ impl Game {
         }
         self.fog[player.index()].units = units;
 
-        // Buildings: remember visible ones, retain remembered-but-alive.
+        // Buildings follow the same rule as units: do not reveal an unseen
+        // destruction by consulting live state behind the fog.
         let mut buildings: Vec<RememberedBuilding> = Vec::new();
         for b in &self.buildings {
             if b.owner == enemy && visible[tile_index(b.tile.0, b.tile.1)] {
@@ -175,9 +178,11 @@ impl Game {
                 });
             }
         }
-        let live_bids: Vec<EntityId> = self.buildings.iter().map(|b| b.id).collect();
         for m in &self.fog[player.index()].buildings {
-            if live_bids.contains(&m.id) && !buildings.iter().any(|x| x.id == m.id) {
+            if !visible[tile_index(m.tile.0, m.tile.1)]
+                && !buildings.iter().any(|x| x.id == m.id)
+                && m.last_seen >= tick - crate::fixed::TICKS_PER_SEC * 60
+            {
                 buildings.push(m.clone());
             }
         }
@@ -211,4 +216,44 @@ fn mark_visible(visible: &mut [bool], pos: Pos, vision: Fix) {
 #[allow(dead_code)]
 fn _tile_helpers() -> ((u8, u8), usize) {
     (tile_coords(0), 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Game, GameConfig, Map, Player};
+
+    #[test]
+    fn hidden_destruction_does_not_remove_last_seen_memory() {
+        let mut game = Game::new(Map::generate(1), GameConfig::default());
+        let unit_pos = Pos::from_tile(30, 30);
+        game.fog[Player::P0.index()].units.push(RememberedUnit {
+            id: 999,
+            pos: unit_pos,
+            last_seen: 0,
+            utype: UnitType::Infantry,
+        });
+        game.fog[Player::P0.index()]
+            .buildings
+            .push(RememberedBuilding {
+                id: 1_000,
+                tile: (31, 31),
+                last_seen: 0,
+                btype: BuildingType::Factory,
+            });
+
+        // Neither remembered tile is visible, and the entities do not exist
+        // in authoritative state. Their absence must not leak through fog.
+        game.update_memory(Player::P0, &vec![false; MAP_TILES]);
+        assert_eq!(game.fog[0].units.len(), 1);
+        assert_eq!(game.fog[0].buildings.len(), 1);
+
+        // Re-observing the remembered locations is enough to remove them.
+        let mut visible = vec![false; MAP_TILES];
+        visible[tile_index(30, 30)] = true;
+        visible[tile_index(31, 31)] = true;
+        game.update_memory(Player::P0, &visible);
+        assert!(game.fog[0].units.is_empty());
+        assert!(game.fog[0].buildings.is_empty());
+    }
 }

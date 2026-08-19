@@ -22,16 +22,24 @@ M9 (champion & museum playable in the live lobby) implemented.**
   external APIs. The server binds a localhost socket and serves the client.
 - REST endpoints (v1): `/api/champion`, `/api/elo-history`,
   `/api/lineage`, `/api/museum`, `/api/replays`, `/api/replay/:id`,
-  `/api/status`, `POST /api/match`. No auth in v1 (localhost); an auth hook is
-  reserved in the router config for a future VPS deploy.
+  `/api/status`, `POST /api/report/:old/:new`, and
+  `POST /api/autobattle/:a/:b`. Diagnostic POST endpoints are serialized,
+  capped at a short diagnostic match duration, and run off the async runtime;
+  auto-battle persistence is never a GET side effect. No auth in v1
+  (localhost); an auth hook is reserved in the router config for a future VPS
+  deploy.
 - WebSocket live-match protocol (M3): client sends
   `JoinMatch { opponent }` then `Commands { cmds[] }`; server sends
   `MatchStart`, per-tick fogged `StateDiff`, and `MatchEnd { result, replay_id }`.
-  Invalid commands are rejected with a reason.
+  Invalid commands receive `CommandRejected { index, reason }`. Incoming
+  websocket messages, queued batches, command counts, and move-group sizes
+  are bounded before reaching simulation/pathfinding.
 - `StateDiff` entities for the human player's buildings carry `queue` (unit
   kind names, oldest first), `progress` (ticks into the current item), and
   `buildTime` (ticks for the current item) so the client can render the build
   queue. Enemy/unit entities omit these fields.
+- `StateDiff.events` carries only the connected human player's events; enemy
+  activity is represented solely through fog-legal entity sightings.
 - Command wire format is pinned by serde derives: `player` is the variant
   name `"P0"`/`"P1"` (NOT an index), `btype`/`utype` are variant names.
   The client pins this contract in `client/src/types.test.ts`, and the

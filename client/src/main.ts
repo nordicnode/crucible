@@ -188,6 +188,10 @@ function onServerMsg(msg: ServerMsg): void {
       el("result").classList.remove("hidden");
       break;
     }
+    case "commandRejected": {
+      intel.addEntry(world.tick, `Order rejected: ${msg.reason}`, "warn", "ORDER");
+      break;
+    }
   }
 }
 
