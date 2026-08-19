@@ -82,11 +82,9 @@ pub fn decide(game: &Game, player: Player, genome: &[f32], input: &FeatureInput)
     if let Some((_, i)) = best_train {
         let utype = TRAIN_TYPES[i];
         let producer = producer_for(utype);
-        if let Some(b) = game
-            .buildings
-            .iter()
-            .find(|b| b.owner == player && b.btype == producer && b.queue.len() < game.config.max_queue)
-        {
+        if let Some(b) = game.buildings.iter().find(|b| {
+            b.owner == player && b.btype == producer && b.queue.len() < game.config.max_queue
+        }) {
             cmds.push(Command::TrainUnit {
                 player,
                 building: b.id,

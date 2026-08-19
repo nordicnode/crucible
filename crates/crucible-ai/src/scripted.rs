@@ -7,8 +7,8 @@
 //! They are deterministic given a map seed and never exceed the sim's APM cap.
 
 use crucible_sim::{
-    building_stats, unit_stats, Building, BuildingType, Command, EntityId, Game, Player,
-    Stance, UnitType, Upgrade,
+    building_stats, unit_stats, Building, BuildingType, Command, EntityId, Game, Player, Stance,
+    UnitType, Upgrade,
 };
 
 use crate::bot::Bot;
@@ -135,7 +135,12 @@ fn train_up_to(
     let building = g
         .buildings
         .iter()
-        .filter(|b| b.owner == p && b.btype == producer && b.is_alive() && b.queue.len() < g.config.max_queue)
+        .filter(|b| {
+            b.owner == p
+                && b.btype == producer
+                && b.is_alive()
+                && b.queue.len() < g.config.max_queue
+        })
         .min_by_key(|b| b.queue.len())?;
     if !can_afford(g, p, unit_stats(ut).cost) {
         return None;
@@ -237,7 +242,8 @@ impl Bot for EasyBot {
         // turret slow the opening rush; the turtle never attacks, so these
         // delay the inevitable rather than win.
         if own_building(g, p, BuildingType::Factory).is_some() {
-            if let Some(c) = place_if_missing(g, p, BuildingType::Barracks, base_offset(hq, 2, 2), 1)
+            if let Some(c) =
+                place_if_missing(g, p, BuildingType::Barracks, base_offset(hq, 2, 2), 1)
             {
                 out.push(c);
             }
@@ -298,7 +304,8 @@ impl Bot for MediumBot {
         if let Some(c) = place_if_missing(g, p, BuildingType::Factory, base_offset(hq, 0, 2), 1) {
             out.push(c);
         }
-        if let Some(c) = place_if_missing(g, p, BuildingType::PowerPlant, base_offset(hq, 0, -2), 1) {
+        if let Some(c) = place_if_missing(g, p, BuildingType::PowerPlant, base_offset(hq, 0, -2), 1)
+        {
             out.push(c);
         }
         if let Some(c) = place_if_missing(g, p, BuildingType::Barracks, base_offset(hq, 2, 2), 1) {
@@ -358,7 +365,8 @@ impl Bot for HardBot {
         if let Some(c) = place_if_missing(g, p, BuildingType::Factory, base_offset(hq, 0, 2), 1) {
             out.push(c);
         }
-        if let Some(c) = place_if_missing(g, p, BuildingType::PowerPlant, base_offset(hq, 0, -2), 1) {
+        if let Some(c) = place_if_missing(g, p, BuildingType::PowerPlant, base_offset(hq, 0, -2), 1)
+        {
             out.push(c);
         }
         if let Some(c) = place_if_missing(g, p, BuildingType::Barracks, base_offset(hq, 2, 2), 1) {
@@ -388,7 +396,8 @@ impl Bot for HardBot {
 
         // 5. Dual Factory mass production.
         if own_building(g, p, BuildingType::TechLab).is_some() {
-            if let Some(c) = place_if_missing(g, p, BuildingType::Factory, base_offset(hq, 0, 4), 2) {
+            if let Some(c) = place_if_missing(g, p, BuildingType::Factory, base_offset(hq, 0, 4), 2)
+            {
                 out.push(c);
             }
         }
