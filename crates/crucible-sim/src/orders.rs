@@ -11,7 +11,6 @@ use crate::entity::{
     PLACE_RADIUS_TILES,
 };
 use crate::game::Game;
-use crate::map::tile_index;
 
 /// A player command. Serialized as a tagged enum for the wire/replay format.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -31,6 +30,14 @@ pub enum Command {
         units: Vec<EntityId>,
         waypoint: (u8, u8),
         stance: Stance,
+    },
+    /// Explicitly attack a specific enemy unit or building (focus-fire). The
+    /// targeted units path to it and engage only it until it dies or leaves
+    /// vision; auto-acquire is suppressed while the order is active.
+    Attack {
+        player: Player,
+        units: Vec<EntityId>,
+        target: EntityId,
     },
     SetRally {
         player: Player,
@@ -58,6 +65,7 @@ impl Command {
             Command::PlaceBuilding { player, .. }
             | Command::TrainUnit { player, .. }
             | Command::MoveGroup { player, .. }
+            | Command::Attack { player, .. }
             | Command::SetRally { player, .. }
             | Command::ChooseUpgrade { player, .. }
             | Command::Sell { player, .. }
@@ -73,6 +81,7 @@ impl Command {
             Command::PlaceBuilding { player: p, .. }
             | Command::TrainUnit { player: p, .. }
             | Command::MoveGroup { player: p, .. }
+            | Command::Attack { player: p, .. }
             | Command::SetRally { player: p, .. }
             | Command::ChooseUpgrade { player: p, .. }
             | Command::Sell { player: p, .. }
@@ -100,6 +109,10 @@ pub enum CommandError {
     CantSellHq,
     BuildingFullHealth,
     EmptyGroup,
+    /// A unit that cannot fire (e.g. a harvester) cannot be ordered to attack.
+    NotACombatant,
+    /// The ordered attack target is not a living enemy entity.
+    NoSuchTarget,
     QueueFull,
     /// Command dropped by the APM budget (rate limit).
     RateLimited,
@@ -132,6 +145,11 @@ impl Game {
                 waypoint,
                 ..
             } => self.validate_move(*player, units, *waypoint),
+            Command::Attack {
+                player,
+                units,
+                target,
+            } => self.validate_attack(*player, units, *target),
             Command::SetRally {
                 player,
                 building,
@@ -204,10 +222,18 @@ impl Game {
         if btype == BuildingType::Hq {
             return Err(NotABuilding);
         }
+        // Tech tree: the TechLab needs a Factory, the Airfield needs a
+        // Factory, and the Radar / TeslaCoil sit on the second tier (they need
+        // the TechLab itself, which transitively needs the Factory).
         if (btype == BuildingType::TechLab || btype == BuildingType::Airfield)
             && self.count_buildings(player, BuildingType::Factory) == 0
         {
             return Err(RequiresFactory);
+        }
+        if (btype == BuildingType::Radar || btype == BuildingType::TeslaCoil)
+            && self.count_buildings(player, BuildingType::TechLab) == 0
+        {
+            return Err(RequiresTechLab);
         }
         self.validate_tile(tile)?;
         if self.building_at(tile).is_some() {
@@ -240,7 +266,8 @@ impl Game {
         if !building_produces(b.btype).contains(&utype) {
             return Err(BuildingCannotTrain);
         }
-        if utype == UnitType::Artillery && self.count_buildings(player, BuildingType::TechLab) == 0
+        if (utype == UnitType::Artillery || utype == UnitType::MammothTank)
+            && self.count_buildings(player, BuildingType::TechLab) == 0
         {
             return Err(RequiresTechLab);
         }
@@ -270,6 +297,40 @@ impl Game {
             }
         }
         self.validate_tile(waypoint)?;
+        Ok(())
+    }
+
+    fn validate_attack(
+        &self,
+        player: Player,
+        units: &[EntityId],
+        target: EntityId,
+    ) -> Result<(), CommandError> {
+        use CommandError::*;
+        if units.is_empty() {
+            return Err(EmptyGroup);
+        }
+        for id in units {
+            let u = self.unit(player, *id).ok_or(NotYourEntity)?;
+            if !u.is_alive() {
+                return Err(EntityDead);
+            }
+            if crate::entity::unit_stats(u.utype).damage <= 0 {
+                return Err(NotACombatant);
+            }
+        }
+        let enemy = player.enemy();
+        let target_exists = self
+            .units
+            .iter()
+            .any(|u| u.id == target && u.owner == enemy && u.is_alive())
+            || self
+                .buildings
+                .iter()
+                .any(|b| b.id == target && b.owner == enemy && b.is_alive());
+        if !target_exists {
+            return Err(NoSuchTarget);
+        }
         Ok(())
     }
 
@@ -307,25 +368,4 @@ impl Game {
             .filter(|b| b.owner == player && b.btype == btype)
             .count()
     }
-
-    #[allow(dead_code)]
-    fn tile_is_empty(&self, tile: (u8, u8)) -> bool {
-        self.building_at(tile).is_none()
-    }
-}
-
-/// The number of commands a player has issued since the last APM check (for
-/// debugging/tuning counters).
-#[allow(dead_code)]
-pub fn command_tile(cmd: &Command) -> (u8, u8) {
-    match cmd {
-        Command::PlaceBuilding { tile, .. } | Command::SetRally { waypoint: tile, .. } => *tile,
-        Command::MoveGroup { waypoint, .. } => *waypoint,
-        _ => (0, 0),
-    }
-}
-
-#[allow(dead_code)]
-fn _tile_index_reexport(x: u8, y: u8) -> usize {
-    tile_index(x, y)
 }

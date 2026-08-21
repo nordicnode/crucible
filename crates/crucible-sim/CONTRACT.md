@@ -65,9 +65,11 @@ Reordering these changes determinism and requires a golden-hash update.
 
 ## 3a. Movement contract
 
-- Buildings are **blocking**: `step_towards`/`find_path` take a per-tick
-  `blocked` overlay (building tiles), so units path around and never walk
-  through buildings. `Game::blocked_grid()` builds the overlay.
+- Buildings are **blocking** for ground units: `step_towards`/`find_path`
+  take a per-tick `blocked` overlay (building tiles), so units path around
+  and never walk through buildings. `Game::blocked_grid()` builds the
+  overlay. **Aircraft** (`unit_stats(utype).air`) fly over buildings — the
+  overlay is skipped for them — but still respect map terrain passability.
 - `MoveGroup` spreads the group around the waypoint in a deterministic
   one-tile ring (`movement::formation_tile`), so a group arrives as a cluster
   instead of stacking on one tile.
@@ -79,7 +81,13 @@ Reordering these changes determinism and requires a golden-hash update.
 ## 4. Command & validation contract
 
 - The complete action space is `orders::Command`: `PlaceBuilding`,
-  `TrainUnit`, `MoveGroup`, `SetRally`, `ChooseUpgrade`, `Sell`.
+  `TrainUnit`, `MoveGroup`, `Attack`, `SetRally`, `ChooseUpgrade`, `Sell`,
+  `Repair`.
+- `Attack` is focus-fire: the ordered units lock onto the single target
+  (unit or building) and ignore everything else, pathing around obstacles
+  toward it. The order lapses to `Idle` once the target dies or leaves
+  vision, after which normal auto-acquire resumes. Harvester-type units
+  (no damage) are rejected with `NotACombatant`.
 - **One validator.** `Game::validate_command` is the only validation path;
   `apply_commands` validates, charges the APM budget, then executes. Humans,
   the AI, ghosts, and tests all go through it. No bypass exists.
@@ -89,8 +97,11 @@ Reordering these changes determinism and requires a golden-hash update.
 - Economy rules: train cost is charged at queue time; sell refunds 50%;
   building placement requires a passable, ore-free, unoccupied tile within
   `PLACE_RADIUS_TILES` (5) of the *nearest own building* — bases grow in
-  connected clumps, not scattered structures; artillery production requires a
-  Tech Lab; Tech Lab placement requires a Factory; the upgrade is chosen once.
+  connected clumps, not scattered structures; artillery and Mammoth Tank
+  production require a Tech Lab; Tech Lab placement requires a Factory;
+  Radar and Tesla Coil placement require a Tech Lab; the upgrade (Damage /
+  Hp / Range) is chosen once per player, from any Tech Lab, and applies
+  globally (damage +15%, max HP +15%, attack range +20%).
 - A match may end as a draw (`winner = null`): simultaneous HQ destruction and
   equal remaining value at timeout are side-neutral terminal results.
 
@@ -110,7 +121,7 @@ Reordering these changes determinism and requires a golden-hash update.
 - `Game` is `Serialize`/`Deserialize` and byte-stable at any tick (field order
   is definition order).
 - A replay is an **input log**: `{version, map_seed, config, commands[],
-  result?}` (`serialize::Replay`), not a state dump. `FORMAT_VERSION = 1`.
+  result?}` (`serialize::Replay`), not a state dump. `FORMAT_VERSION = 3`.
   Version envelopes exist from day one; old replays must stay re-runnable.
 
 ## 7. Guarantees to dependents

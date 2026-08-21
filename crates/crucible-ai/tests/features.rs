@@ -1,7 +1,7 @@
 //! Feature-legality fuzz: the feature vector must derive only from the fogged
 //! view + own state. Changing *hidden* enemy state must produce a zero delta.
 
-use crucible_ai::{extract, FeatureInput};
+use crucible_ai::{extract_single, FeatureInput};
 use crucible_sim::{
     unit_stats, Game, GameConfig, Map, Player, Pos, Stance, Unit, UnitOrder, UnitType,
 };
@@ -56,8 +56,8 @@ fn hidden_enemy_state_has_zero_feature_delta() {
         spawn_unit(&mut tampered, Player::P1, UnitType::Tank, tile);
         spawn_unit(&mut tampered, Player::P1, UnitType::Artillery, tile);
 
-        let fa = extract(&FeatureInput::from_game(&base, Player::P0));
-        let fb = extract(&FeatureInput::from_game(&tampered, Player::P0));
+        let fa = extract_single(&FeatureInput::from_game(&base, Player::P0));
+        let fb = extract_single(&FeatureInput::from_game(&tampered, Player::P0));
         assert_eq!(
             fa, fb,
             "hidden enemy state leaked into features (seed {seed})"
@@ -79,7 +79,7 @@ fn visible_enemy_state_does_change_features() {
     let tile = ((visible_idx % 64) as u8, (visible_idx / 64) as u8);
     spawn_unit(&mut revealed, Player::P1, UnitType::Tank, tile);
 
-    let fa = extract(&FeatureInput::from_game(&base, Player::P0));
-    let fb = extract(&FeatureInput::from_game(&revealed, Player::P0));
+    let fa = extract_single(&FeatureInput::from_game(&base, Player::P0));
+    let fb = extract_single(&FeatureInput::from_game(&revealed, Player::P0));
     assert_ne!(fa, fb, "features must respond to a visible enemy");
 }

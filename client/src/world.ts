@@ -22,6 +22,9 @@ export class World {
   visible = new Set<number>();
   events: { tick: number; kind: string }[] = [];
   result: { winner: number | null; reason: string | null } | null = null;
+  /** Authoritative power from the server's state diffs (null outside live
+   *  matches, where the static table below is the fallback). */
+  private serverPower: { produced: number; consumed: number } | null = null;
   private movingEntities = new Set<number>();
 
   get ownUnits(): Entity[] {
@@ -31,6 +34,9 @@ export class World {
     return [...this.entities.values()].filter((e) => e.owner === 0 && BUILDING_KINDS.has(e.kind));
   }
   get ownPower(): { produced: number; consumed: number } {
+    // Prefer the server's authoritative readout; fall back to the static
+    // table only for menu/spectate scenes that have no live diff.
+    if (this.serverPower) return this.serverPower;
     let produced = 0;
     let consumed = 0;
     for (const b of this.ownBuildings) {
@@ -59,9 +65,11 @@ export class World {
     oreTiles: OreTile[],
     visible: number[],
     events: { tick: number; kind: string }[],
+    power?: { produced: number; consumed: number },
   ): void {
     this.tick = tick;
     this.ore = ore;
+    this.serverPower = power ?? null;
     this.entities = new Map(entities.map((e) => [e.id, e]));
     // Carry over display positions for entities that still exist; new
     // entities snap to their first reported position.

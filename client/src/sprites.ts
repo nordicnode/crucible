@@ -292,11 +292,215 @@ export function drawUnitSprite(
     case "Artillery":
       drawArtillery(ctx, zoom, pal, tick, firingAge);
       break;
+    case "MammothTank":
+      drawMammothTank(ctx, zoom, pal, firingAge);
+      break;
     case "Harvester":
       drawHarvester(ctx, zoom, pal, tick, carryingOre);
       break;
+    case "Gunship":
+      drawGunship(ctx, zoom, pal, tick, firingAge, isMoving);
+      break;
+    case "Interceptor":
+      drawInterceptor(ctx, zoom, pal, tick, firingAge, isMoving);
+      break;
     default:
       pRect(ctx, -4, -4, 8, 8, pal.primary);
+  }
+
+  ctx.restore();
+}
+
+/** Gunship: Rotary attack helicopter (+X is forward) */
+function drawGunship(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+  firingAge: number = -1,
+  isMoving: boolean = false,
+): void {
+  const s = Math.max(14, Math.floor(z * 0.42));
+
+  // 1. Ground Drop Shadow (cast on terrain beneath elevated helicopter)
+  const shadowDist = Math.max(4, Math.floor(s * 0.35));
+  pRect(ctx, -s * 0.8 + shadowDist * 0.5, -s * 0.6 + shadowDist, s * 1.6, s * 1.2, "rgba(0, 0, 0, 0.45)");
+
+  // 2. Flight altitude hover oscillation
+  const hoverY = isMoving ? 0 : Math.sin(tick * 0.2) * 1.5;
+  ctx.save();
+  ctx.translate(0, hoverY);
+
+  // 3. Tail boom (-X) and tail rotor
+  pRect(ctx, -s * 1.1, -s * 0.12, s * 0.65, s * 0.24, "#1e293b");
+  pRect(ctx, -s * 1.05, -s * 0.08, s * 0.55, s * 0.16, "#334155");
+  pRect(ctx, -s * 1.15, -s * 0.35, s * 0.15, s * 0.7, "#0f172a");
+  pRect(ctx, -s * 1.12, -s * 0.3, s * 0.1, s * 0.6, pal.primaryDark);
+  // High-speed spinning tail rotor
+  const tailPhase = Math.floor(tick * 1.5) % 2;
+  const tailBladeSpan = tailPhase === 0 ? s * 0.6 : s * 0.4;
+  pRect(ctx, -s * 1.18, -tailBladeSpan / 2, 2, tailBladeSpan, "#facc15");
+
+  // 4. Weapon Stub Wings & Heavy Rocket Pods (-Y and +Y)
+  pRect(ctx, -s * 0.2, -s * 0.75, s * 0.35, s * 1.5, "#1e293b");
+  pRect(ctx, -s * 0.15, -s * 0.7, s * 0.25, s * 1.4, "#334155");
+  // Left Rocket Pod
+  pRect(ctx, -s * 0.3, -s * 0.8, s * 0.55, s * 0.25, "#0f172a");
+  pRect(ctx, -s * 0.25, -s * 0.75, s * 0.45, s * 0.15, "#1e293b");
+  pRect(ctx, s * 0.22, -s * 0.78, 2, s * 0.21, "#ea580c"); // Warhead tips
+  // Right Rocket Pod
+  pRect(ctx, -s * 0.3, s * 0.55, s * 0.55, s * 0.25, "#0f172a");
+  pRect(ctx, -s * 0.25, s * 0.6, s * 0.45, s * 0.15, "#1e293b");
+  pRect(ctx, s * 0.22, s * 0.57, 2, s * 0.21, "#ea580c"); // Warhead tips
+
+  // 5. Armored Main Fuselage (+X forward)
+  pRect(ctx, -s * 0.6, -s * 0.45, s * 1.15, s * 0.9, "#090d16");
+  pRect(ctx, -s * 0.55, -s * 0.4, s * 1.05, s * 0.8, pal.primaryDark);
+  pRect(ctx, -s * 0.45, -s * 0.32, s * 0.85, s * 0.64, pal.primary);
+  pRect(ctx, -s * 0.35, -s * 0.22, s * 0.65, s * 0.44, pal.primaryLight);
+
+  // Engine nacelles
+  pRect(ctx, -s * 0.35, -s * 0.35, s * 0.35, s * 0.15, "#0f172a");
+  pRect(ctx, -s * 0.35, s * 0.2, s * 0.35, s * 0.15, "#0f172a");
+  pRect(ctx, -s * 0.38, -s * 0.32, 2, s * 0.1, "#ea580c");
+  pRect(ctx, -s * 0.38, s * 0.22, 2, s * 0.1, "#ea580c");
+
+  // 6. Tandem Cockpit Canopy (+X forward, centered on Y)
+  pRect(ctx, s * 0.05, -s * 0.22, s * 0.48, s * 0.44, "#064e3b");
+  pRect(ctx, s * 0.1, -s * 0.18, s * 0.4, s * 0.36, "#059669");
+  pRect(ctx, s * 0.15, -s * 0.14, s * 0.3, s * 0.28, "#34d399");
+  pRect(ctx, s * 0.22, -s * 0.1, s * 0.15, s * 0.1, "#ffffff");
+
+  // 7. Nose Taper & Chin-Mounted Rotary Vulcan Minigun
+  pRect(ctx, s * 0.45, -s * 0.16, s * 0.15, s * 0.32, "#090d16");
+  const gunLength = Math.floor(s * 0.45);
+  pRect(ctx, s * 0.55, -2, gunLength, 4, "#09090b");
+  pRect(ctx, s * 0.58, -1, gunLength - 2, 2, "#64748b");
+  pRect(ctx, s * 0.55 + gunLength - 2, -3, 2, 6, "#1e293b");
+
+  // 8. Main Rotor Mast & High-Speed Spinning Blades
+  const hubX = -s * 0.05;
+  const hubY = 0;
+  const rotorRadius = Math.floor(s * 1.35);
+
+  // Rotor motion disc
+  ctx.fillStyle = "rgba(148, 163, 184, 0.18)";
+  ctx.beginPath();
+  ctx.arc(hubX, hubY, rotorRadius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Spinning 4-blade rotor cross
+  const spinAngle = tick * 1.25;
+  ctx.save();
+  ctx.translate(hubX, hubY);
+  ctx.rotate(spinAngle);
+
+  pRect(ctx, -rotorRadius, -1.5, rotorRadius * 2, 3, "#1e293b");
+  pRect(ctx, -1.5, -rotorRadius, 3, rotorRadius * 2, "#1e293b");
+  pRect(ctx, -rotorRadius, -1.5, 3, 3, "#facc15");
+  pRect(ctx, rotorRadius - 3, -1.5, 3, 3, "#facc15");
+  pRect(ctx, -1.5, -rotorRadius, 3, 3, "#facc15");
+  pRect(ctx, -1.5, rotorRadius - 3, 3, 3, "#facc15");
+
+  pRect(ctx, -3, -3, 6, 6, "#475569");
+  pRect(ctx, -2, -2, 4, 4, "#facc15");
+  ctx.restore();
+
+  // 9. Combat Firing Animation
+  if (firingAge >= 0 && firingAge <= 2) {
+    const tipX = s * 0.55 + gunLength;
+    pRect(ctx, tipX, -3, 6, 6, "#f97316");
+    pRect(ctx, tipX + 1, -2, 4, 4, "#fef08a");
+    pRect(ctx, tipX + 2, -1, 2, 2, "#ffffff");
+
+    const podFlashPhase = tick % 2;
+    const podY = podFlashPhase === 0 ? -s * 0.75 : s * 0.65;
+    pRect(ctx, s * 0.28, podY - 2, 5, 5, "#ea580c");
+    pRect(ctx, s * 0.32, podY - 1, 3, 3, "#fef08a");
+  }
+
+  ctx.restore();
+}
+
+/** Interceptor: Supersonic jet fighter (+X is forward) */
+function drawInterceptor(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+  firingAge: number = -1,
+  isMoving: boolean = false,
+): void {
+  const s = Math.max(14, Math.floor(z * 0.42));
+
+  // 1. Ground Drop Shadow
+  const shadowDist = Math.max(5, Math.floor(s * 0.4));
+  pRect(ctx, -s * 0.8 + shadowDist * 0.5, -s * 0.8 + shadowDist, s * 1.7, s * 1.6, "rgba(0, 0, 0, 0.45)");
+
+  ctx.save();
+
+  // 2. Twin High-Thrust Plasma Afterburners (-X exhaust)
+  const thrustFlicker = (tick * 2) % 4;
+  const thrustLen = isMoving ? s * 0.8 + thrustFlicker * 2 : s * 0.4 + thrustFlicker;
+  const exhaustY1 = -s * 0.2;
+  const exhaustY2 = s * 0.2;
+
+  pRect(ctx, -s * 0.75, exhaustY1 - 2, s * 0.2, 4, "#0f172a");
+  pRect(ctx, -s * 0.75, exhaustY2 - 2, s * 0.2, 4, "#0f172a");
+
+  pRect(ctx, -s * 0.75 - thrustLen, exhaustY1 - 3, thrustLen, 6, "#ea580c");
+  pRect(ctx, -s * 0.75 - thrustLen * 0.75, exhaustY1 - 2, thrustLen * 0.75, 4, "#facc15");
+  pRect(ctx, -s * 0.75 - thrustLen * 0.4, exhaustY1 - 1, thrustLen * 0.4, 2, "#ffffff");
+
+  pRect(ctx, -s * 0.75 - thrustLen, exhaustY2 - 3, thrustLen, 6, "#ea580c");
+  pRect(ctx, -s * 0.75 - thrustLen * 0.75, exhaustY2 - 2, thrustLen * 0.75, 4, "#facc15");
+  pRect(ctx, -s * 0.75 - thrustLen * 0.4, exhaustY2 - 1, thrustLen * 0.4, 2, "#ffffff");
+
+  // 3. Swept Delta Wings (spanning Y)
+  pRect(ctx, -s * 0.65, -s * 1.05, s * 0.95, s * 2.1, "#090d16");
+  pRect(ctx, -s * 0.55, -s * 0.95, s * 0.8, s * 1.9, pal.primaryDark);
+  pRect(ctx, -s * 0.4, -s * 0.8, s * 0.65, s * 1.6, pal.primary);
+  pRect(ctx, -s * 0.25, -s * 0.6, s * 0.5, s * 1.2, pal.primaryLight);
+
+  pRect(ctx, -s * 0.45, -s * 0.85, 1.5, s * 0.5, "#0f172a");
+  pRect(ctx, -s * 0.45, s * 0.35, 1.5, s * 0.5, "#0f172a");
+
+  // 4. Wingtip Air-to-Air Missile Rails
+  pRect(ctx, -s * 0.45, -s * 1.05, s * 0.6, 2.5, "#38bdf8");
+  pRect(ctx, s * 0.12, -s * 1.05, 2.5, 2.5, "#ef4444");
+  pRect(ctx, -s * 0.45, s * 1.05 - 2.5, s * 0.6, 2.5, "#38bdf8");
+  pRect(ctx, s * 0.12, s * 1.05 - 2.5, 2.5, 2.5, "#ef4444");
+
+  // 5. Twin Canted Vertical Stabilizers (-X rear)
+  pRect(ctx, -s * 0.6, -s * 0.45, s * 0.35, 3, "#334155");
+  pRect(ctx, -s * 0.6, s * 0.45 - 3, s * 0.35, 3, "#334155");
+  pRect(ctx, -s * 0.55, -s * 0.42, s * 0.25, 2, pal.primaryLight);
+  pRect(ctx, -s * 0.55, s * 0.42 - 2, s * 0.25, 2, pal.primaryLight);
+
+  // 6. Aerodynamic Fuselage (+X is forward)
+  pRect(ctx, -s * 0.7, -s * 0.26, s * 1.45, s * 0.52, "#090d16");
+  pRect(ctx, -s * 0.65, -s * 0.22, s * 1.35, s * 0.44, "#1e293b");
+  pRect(ctx, -s * 0.55, -s * 0.18, s * 1.2, s * 0.36, "#334155");
+  pRect(ctx, -s * 0.4, -s * 0.14, s * 0.95, s * 0.28, pal.primary);
+
+  // Sharp forward needle nose cone & radar radome
+  pRect(ctx, s * 0.55, -s * 0.12, s * 0.35, s * 0.24, "#475569");
+  pRect(ctx, s * 0.7, -s * 0.08, s * 0.3, s * 0.16, "#94a3b8");
+  pRect(ctx, s * 0.95, -1, s * 0.2, 2, "#cbd5e1");
+
+  // 7. Holographic Cyan Pilot Cockpit Canopy
+  pRect(ctx, s * 0.1, -s * 0.14, s * 0.45, s * 0.28, "#0369a1");
+  pRect(ctx, s * 0.15, -s * 0.1, s * 0.35, s * 0.2, "#0284c7");
+  pRect(ctx, s * 0.2, -s * 0.06, s * 0.25, s * 0.12, "#38bdf8");
+  pRect(ctx, s * 0.28, -s * 0.04, s * 0.12, 2, "#ffffff");
+
+  // 8. Combat Firing Animation
+  if (firingAge >= 0 && firingAge <= 2) {
+    const tipX = s * 1.15;
+    pRect(ctx, tipX, -s * 0.18, 8, 3, "#38bdf8");
+    pRect(ctx, tipX + 2, -s * 0.16, 6, 2, "#ffffff");
+    pRect(ctx, tipX, s * 0.15, 8, 3, "#38bdf8");
+    pRect(ctx, tipX + 2, s * 0.17, 6, 2, "#ffffff");
   }
 
   ctx.restore();
@@ -615,6 +819,12 @@ export function drawBuildingSprite(
       break;
     case "Airfield":
       drawAirfield(ctx, zoom, pal, tick);
+      break;
+    case "Radar":
+      drawRadar(ctx, zoom, pal, tick);
+      break;
+    case "TeslaCoil":
+      drawTeslaCoil(ctx, zoom, pal, heading, tick, firingAge);
       break;
     case "Turret":
       drawTurret(ctx, zoom, pal, heading, tick, firingAge);
@@ -1057,7 +1267,7 @@ function drawTechLab(
   pRect(ctx, r * 0.7 - 2, r * 0.45, 2, r * 0.35, pal.accent);
 }
 
-/** Airfield: Dual-pad landing tarmac with illuminated runway lights, radar tower & fuel depot */
+/** Airfield: Reinforced tarmac base with twin helipads, control tower & rotating radar */
 function drawAirfield(
   ctx: CanvasRenderingContext2D,
   z: number,
@@ -1126,6 +1336,164 @@ function drawAirfield(
   pRect(ctx, -r + 4, r * 0.5, 2, 2, lightPulse ? "#22c55e" : "#14532d");
   pRect(ctx, r * 0.1, -r * 0.1, 2, 2, lightPulse ? "#f59e0b" : "#78350f");
   pRect(ctx, r * 0.1, r * 0.5, 2, 2, lightPulse ? "#f59e0b" : "#78350f");
+}
+
+/** Radar: long-range early-warning dish with a rotating sweep (reveals the map) */
+function drawRadar(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  tick: number,
+): void {
+  const r = Math.max(16, Math.floor(z * 0.48));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 4, -r + 6, r * 2 + 4, r * 2 + 2, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Armored base platform
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#1e293b");
+  pRect(ctx, -r + 2, -r + 2, r * 2 - 4, r * 2 - 4, "#273549");
+
+  // 3. Circular display / array deck
+  const deck = Math.floor(r * 0.72);
+  pRect(ctx, -deck, -deck, deck * 2, deck * 2, "#0f172a");
+  pRect(ctx, -deck + 2, -deck + 2, deck * 2 - 4, deck * 2 - 4, "#0b1c2e");
+
+  // 4. Rotating sweep: a bright radar blip line sweeping around the dish
+  const angle = (tick * 0.08) % (Math.PI * 2);
+  const sx = Math.cos(angle);
+  const sy = Math.sin(angle);
+  // Sweep wedge (trailing fade) drawn as a few short segments
+  for (let k = 0; k < 5; k++) {
+    const a = angle - k * 0.22;
+    const len = deck - 4 - k * 2;
+    pRect(
+      ctx,
+      Math.cos(a) * len - 1,
+      Math.sin(a) * len - 1,
+      2,
+      2,
+      k === 0 ? "#22d3ee" : "#0e7490",
+    );
+  }
+  // Pivot hub
+  pRect(ctx, -2, -2, 4, 4, "#cbd5e1");
+  pRect(ctx, -1, -1, 2, 2, "#ffffff");
+
+  // 5. Central feed mast + blip dot at the sweep tip
+  pRect(ctx, sx * (deck - 6) - 1, sy * (deck - 6) - 1, 2, 2, "#fbbf24");
+  // Team stripe
+  pRect(ctx, -r * 0.55, r * 0.62, r * 1.1, 3, pal.primary);
+}
+
+/** TeslaCoil: high-voltage arc turret that zaps enemies at long range */
+function drawTeslaCoil(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  heading: number = 0,
+  tick: number = 0,
+  firingAge: number = -1,
+): void {
+  const r = Math.max(15, Math.floor(z * 0.45));
+
+  // 1. Ground shadow
+  pRect(ctx, -r + 4, -r + 5, r * 2 + 3, r * 2 + 2, "rgba(0, 0, 0, 0.6)");
+
+  // 2. Concrete barbette (same footprint as a turret)
+  pRect(ctx, -r, -r, r * 2, r * 2, "#090d16");
+  pRect(ctx, -r + 1, -r + 1, r * 2 - 2, r * 2 - 2, "#1e293b");
+
+  // 3. Copper/orange coil rings (stacked, rotated slightly for depth)
+  const coilH = Math.floor(r * 1.7);
+  const coilW = Math.floor(r * 0.9);
+  const ringColor = tick % 4 < 2 ? "#d97706" : "#f59e0b";
+  for (let i = 0; i < 5; i++) {
+    const y = -coilH / 2 + i * Math.floor(coilH / 5);
+    pRect(ctx, -coilW / 2 - 1, y, coilW + 2, 4, "#78350f");
+    pRect(ctx, -coilW / 2, y + 1, coilW, 2, i % 2 === 0 ? "#d97706" : ringColor);
+  }
+
+  // 4. Central emitter orb with idle corona
+  pRect(ctx, -5, -coilH / 2 - 5, 10, 10, "#090d16");
+  pRect(ctx, -4, -coilH / 2 - 4, 8, 8, "#1e3a8a");
+  const idlePulse = tick % 5 < 2;
+  pRect(ctx, -3, -coilH / 2 - 3, 6, 6, idlePulse ? "#38bdf8" : "#0284c7");
+  pRect(ctx, -1, -coilH / 2 - 1, 2, 2, "#e0f2fe");
+
+  // 5. Firing arcs: jagged lightning bolts toward the aim heading
+  if (firingAge >= 0 && firingAge <= 3) {
+    const boltLen = Math.floor(r * 1.6);
+    const bx = Math.cos(heading) * boltLen;
+    const by = Math.sin(heading) * boltLen;
+    const j = (tick % 3) - 1; // jag offset alternates for a lively arc
+    ctx.strokeStyle = "#7dd3fc";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-2, -coilH / 2);
+    ctx.lineTo(bx * 0.4 + j * 2, by * 0.4 - j * 3);
+    ctx.lineTo(bx * 0.7 - j * 3, by * 0.7 + j * 2);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    pRect(ctx, bx - 2, by - 2, 4, 4, "#f0f9ff");
+  }
+
+  // Team stripe
+  pRect(ctx, -r * 0.5, r * 0.55, r, 3, pal.primary);
+}
+
+/** MammothTank: massive twin-barrel siege armor (the tech-tier heavy) */
+function drawMammothTank(
+  ctx: CanvasRenderingContext2D,
+  z: number,
+  pal: TeamPalette,
+  firingAge: number = -1,
+): void {
+  const s = Math.max(20, Math.floor(z * 0.5));
+
+  // 1. Drop shadow
+  pRect(ctx, -s * 0.7, -s * 0.7 + 2, s * 1.4, s * 1.4, "rgba(0, 0, 0, 0.55)");
+
+  // 2. Wide reinforced hull (twin tracks)
+  pRect(ctx, -s, -s * 0.55, s * 2, s * 1.1, "#0f172a");
+  pRect(ctx, -s + 1, -s * 0.55 + 1, s * 2 - 2, s * 1.1 - 2, "#1e293b");
+
+  // Tracks with tread segments
+  for (let i = -4; i <= 4; i++) {
+    const tx = i * Math.floor(s * 0.28);
+    pRect(ctx, tx, -s * 0.62, Math.floor(s * 0.18), 4, "#334155");
+    pRect(ctx, tx, s * 0.58, Math.floor(s * 0.18), 4, "#334155");
+  }
+
+  // 3. Sloped glacis armor
+  pRect(ctx, -s * 0.85, -s * 0.45, s * 1.7, s * 0.9, pal.primaryDark);
+  pRect(ctx, -s * 0.8, -s * 0.4, s * 1.6, s * 0.8, pal.primary);
+  pRect(ctx, -s * 0.75, -s * 0.35, s * 1.5, s * 0.7, pal.primaryLight);
+
+  // 4. Twin rotating turret cupolas
+  pRect(ctx, -s * 0.35, -s * 0.3, s * 0.7, s * 0.6, "#1e293b");
+  pRect(ctx, -s * 0.3, -s * 0.25, s * 0.6, s * 0.5, "#334155");
+
+  // 5. Twin cannons (+X forward) with recoil on fire
+  let recoil = 0;
+  if (firingAge >= 0 && firingAge <= 2) {
+    recoil = (2 - firingAge) * 2;
+  }
+  const barrelW = Math.max(3, Math.floor(s * 0.16));
+  pRect(ctx, -recoil, -s * 0.5 - barrelW / 2, s * 1.2, barrelW, "#09090b");
+  pRect(ctx, -recoil + 1, -s * 0.5 - barrelW / 2 + 0.5, s * 1.2 - 2, barrelW - 1, "#64748b");
+  pRect(ctx, -recoil, s * 0.5 - barrelW / 2, s * 1.2, barrelW, "#09090b");
+  pRect(ctx, -recoil + 1, s * 0.5 - barrelW / 2 + 0.5, s * 1.2 - 2, barrelW - 1, "#64748b");
+  // Muzzle brakes
+  pRect(ctx, s * 1.2 - recoil - 3, -s * 0.5 - barrelW / 2 - 1, 3, barrelW + 2, "#181f2a");
+  pRect(ctx, s * 1.2 - recoil - 3, s * 0.5 - barrelW / 2 - 1, 3, barrelW + 2, "#181f2a");
+
+  // 6. Twin turret hatches & antenna
+  pRect(ctx, -s * 0.22, -s * 0.08, 6, 6, "#090d16");
+  pRect(ctx, s * 0.16, -s * 0.08, 6, 6, "#090d16");
+  pRect(ctx, -s * 0.05, -s * 0.38, 2, 6, "#94a3b8");
+  pRect(ctx, -s * 0.05, -s * 0.44, 4, 2, "#ef4444");
 }
 
 /** Turret: Circular reinforced gun emplacement with rotating twin heavy auto-cannons */
@@ -1225,25 +1593,28 @@ export function drawTacticalIcon(
   cy: number,
   _size: number = 46,
   color: string = "#f59e0b",
+  frame: boolean = true,
 ): void {
   ctx.save();
   ctx.translate(Math.floor(cx), Math.floor(cy));
 
-  // Outer beveled frame & high-tech dark carbon backplate
-  pRect(ctx, -23, -23, 46, 46, "#020617"); // Deep tactical border
-  pRect(ctx, -22, -22, 44, 44, "#0f172a"); // Outer chamfer
-  pRect(ctx, -21, -21, 42, 42, "#1e293b"); // Beveled body
-  pRect(ctx, -20, -20, 40, 40, "#090d16"); // High-contrast dark interior screen
+  if (frame) {
+    // Outer beveled frame & high-tech dark carbon backplate
+    pRect(ctx, -23, -23, 46, 46, "#020617"); // Deep tactical border
+    pRect(ctx, -22, -22, 44, 44, "#0f172a"); // Outer chamfer
+    pRect(ctx, -21, -21, 42, 42, "#1e293b"); // Beveled body
+    pRect(ctx, -20, -20, 40, 40, "#090d16"); // High-contrast dark interior screen
 
-  // Tactical cyan corner brackets
-  pRect(ctx, -20, -20, 4, 1, "#38bdf8");
-  pRect(ctx, -20, -20, 1, 4, "#38bdf8");
-  pRect(ctx, 16, -20, 4, 1, "#38bdf8");
-  pRect(ctx, 19, -20, 1, 4, "#38bdf8");
-  pRect(ctx, -20, 19, 4, 1, "#38bdf8");
-  pRect(ctx, -20, 16, 1, 4, "#38bdf8");
-  pRect(ctx, 16, 19, 4, 1, "#38bdf8");
-  pRect(ctx, 19, 16, 1, 4, "#38bdf8");
+    // Tactical cyan corner brackets
+    pRect(ctx, -20, -20, 4, 1, "#38bdf8");
+    pRect(ctx, -20, -20, 1, 4, "#38bdf8");
+    pRect(ctx, 16, -20, 4, 1, "#38bdf8");
+    pRect(ctx, 19, -20, 1, 4, "#38bdf8");
+    pRect(ctx, -20, 19, 4, 1, "#38bdf8");
+    pRect(ctx, -20, 16, 1, 4, "#38bdf8");
+    pRect(ctx, 16, 19, 4, 1, "#38bdf8");
+    pRect(ctx, 19, 16, 1, 4, "#38bdf8");
+  }
 
   const norm = kind.toLowerCase();
 
@@ -1623,6 +1994,67 @@ export function drawTacticalIcon(
     // Runway approach lights
     pRect(ctx, -15, -8, 2, 2, "#22c55e");
     pRect(ctx, -15, 6, 2, 2, "#22c55e");
+  } else if (norm === "radar") {
+    // Long-range dish with a bright sweep
+    pRect(ctx, -14, -14, 28, 28, "#1e293b");
+    pRect(ctx, -12, -12, 24, 24, "#0f172a");
+    pRect(ctx, -10, -10, 20, 20, "#0b1c2e");
+    // Sweep wedge (fixed diagonal for the icon)
+    pRect(ctx, -8, -8, 16, 1, "#22d3ee");
+    pRect(ctx, -7, -7, 1, 15, "#22d3ee");
+    pRect(ctx, 2, -2, 6, 1, "#38bdf8");
+    // Blip
+    pRect(ctx, 8, -3, 3, 3, "#fbbf24");
+    // Pivot + mast
+    pRect(ctx, -2, -2, 4, 4, "#cbd5e1");
+    pRect(ctx, -1, -1, 2, 2, "#ffffff");
+    pRect(ctx, -1, -13, 2, 5, "#64748b");
+  } else if (norm === "teslacoil") {
+    // High-voltage coil with arcs
+    pRect(ctx, -12, -18, 24, 34, "#78350f");
+    pRect(ctx, -10, -16, 20, 30, "#d97706");
+    pRect(ctx, -8, -14, 16, 4, "#f59e0b");
+    pRect(ctx, -8, -6, 16, 4, "#f59e0b");
+    pRect(ctx, -8, 2, 16, 4, "#f59e0b");
+    pRect(ctx, -8, 10, 16, 4, "#f59e0b");
+    pRect(ctx, -5, -20, 10, 8, "#1e3a8a");
+    pRect(ctx, -3, -19, 6, 6, "#38bdf8");
+    pRect(ctx, -1, -17, 2, 2, "#ffffff");
+    // Arcs
+    pRect(ctx, 10, -16, 8, 2, "#7dd3fc");
+    pRect(ctx, 14, -14, 2, 6, "#7dd3fc");
+    pRect(ctx, -16, 2, 6, 2, "#7dd3fc");
+    pRect(ctx, -14, 4, 2, 5, "#7dd3fc");
+  } else if (norm === "mammothtank") {
+    // Twin-barrel heavy siege tank
+    pRect(ctx, -16, -12, 32, 24, "#1e293b");
+    pRect(ctx, -15, -11, 30, 22, "#1d4ed8");
+    pRect(ctx, -13, -9, 26, 18, "#2563eb");
+    // Twin barrels
+    pRect(ctx, -2, -12, 20, 4, "#334155");
+    pRect(ctx, -1, -11, 18, 2, "#94a3b8");
+    pRect(ctx, -2, 8, 20, 4, "#334155");
+    pRect(ctx, -1, 9, 18, 2, "#94a3b8");
+    pRect(ctx, 17, -13, 3, 6, "#09090b");
+    pRect(ctx, 17, 7, 3, 6, "#09090b");
+    // Turret hatches
+    pRect(ctx, -4, -4, 8, 8, "#1e3a8a");
+    pRect(ctx, -3, -3, 6, 6, "#60a5fa");
+    pRect(ctx, -1, -7, 2, 4, "#94a3b8");
+    pRect(ctx, -1, -9, 4, 2, "#ef4444");
+  } else if (norm === "range") {
+    // Range research: expanding concentric targeting rings
+    pRect(ctx, -13, -13, 26, 26, "#0c4a6e");
+    pRect(ctx, -11, -11, 22, 22, "#075985");
+    pRect(ctx, -9, -9, 18, 18, "#0e7490");
+    pRect(ctx, -6, -6, 12, 12, "#155e75");
+    pRect(ctx, -3, -3, 6, 6, "#164e63");
+    pRect(ctx, -1, -1, 2, 2, "#22d3ee");
+    // Crosshair ticks (radar-style ranging)
+    pRect(ctx, -13, -1, 4, 2, "#38bdf8");
+    pRect(ctx, 9, -1, 4, 2, "#38bdf8");
+    pRect(ctx, -1, -13, 2, 4, "#38bdf8");
+    pRect(ctx, -1, 9, 2, 4, "#38bdf8");
   } else if (norm === "gunship") {
     // Heavy Attack Helicopter / Rotary Gunship (Vivid & Distinct from Jet Fighter)
     // Spinning top rotor blade disc (spinning blurred rotor line)
@@ -1730,6 +2162,36 @@ export function getThumbnailDataUrl(kind: string, _owner: number = 0): string {
   }
   const url = c.toDataURL();
   thumbnailCache.set(kind, url);
+  return url;
+}
+
+const cursorCache = new Map<string, string>();
+
+/**
+ * A C&C-style cursor: the tactical symbol (no frame) rasterized to a 32px
+ * data-URL with the hotspot at the center. Kinds map to the icon art
+ * (`sell` = $ medallion, `repair` = wrench, `attack` = targeting reticle).
+ */
+export function getCursorDataUrl(kind: string): string {
+  const cached = cursorCache.get(kind);
+  if (cached) return cached;
+
+  if (typeof document === "undefined") {
+    cursorCache.set(kind, "default");
+    return "default";
+  }
+
+  // The `attack` cursor reuses the red targeting-reticle icon art.
+  const icon = kind === "attack" ? "damage" : kind;
+  const c = document.createElement("canvas");
+  c.width = 32;
+  c.height = 32;
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    drawTacticalIcon(ctx, icon, 16, 16, 32, "#f59e0b", false);
+  }
+  const url = `url(${c.toDataURL()}) 16 16, auto`;
+  cursorCache.set(kind, url);
   return url;
 }
 

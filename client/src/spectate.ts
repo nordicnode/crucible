@@ -82,6 +82,7 @@ class Spectate {
     hide("lobby");
     hide("result");
     hide("dashboard");
+    hide("museum");
     hide("sidebar");
     hide("log");
     hide("spectate-bar");
@@ -96,7 +97,7 @@ class Spectate {
       const data = (await res.json()) as { matches: ReplaySummary[] };
       this.renderList(data.matches ?? []);
     } catch (e) {
-      this.renderList([], `error: ${(e as Error).message}`);
+      this.renderList([], `error: ${String(e)}`);
     }
   }
 
@@ -135,7 +136,7 @@ class Spectate {
       this.lastTime = performance.now();
       await this.requestFrame(0);
     } catch (e) {
-      this.setStatus(`error: ${(e as Error).message}`);
+      this.setStatus(`error: ${String(e)}`);
     }
   }
 
@@ -201,12 +202,21 @@ class Spectate {
     this.loading = true;
     try {
       const f = await wasmFrame(this.replayJson, t);
-      this.loading = false;
       applyFrame(this.world, f);
       this.renderedTick = f.tick;
       this.ore0 = f.ore0;
       this.ore1 = f.ore1;
       this.updateHud();
+    } catch (e) {
+      // A corrupt/legacy replay must degrade to a visible error, never crash
+      // the page (the wasm shim returns errors instead of panicking).
+      this.playing = false;
+      this.active = false;
+      this.replayJson = null;
+      hide("spectate-bar");
+      show("overlay");
+      show("spectate-list");
+      this.setStatus(`replay error at tick ${t}: ${String(e)}`);
     } finally {
       this.loading = false;
     }

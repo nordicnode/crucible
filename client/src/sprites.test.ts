@@ -11,6 +11,7 @@ import {
   drawSelectionReticle,
   drawTacticalIcon,
   drawUnitSprite,
+  getCursorDataUrl,
   getTeamPalette,
   getThumbnailDataUrl,
   TEAM_BLUE,
@@ -96,7 +97,7 @@ describe("Building sprite rendering", () => {
 
 describe("Unit sprite rendering", () => {
   const ctx = new MockCanvasContext() as unknown as CanvasRenderingContext2D;
-  const units = ["Infantry", "Tank", "Artillery", "Harvester"];
+  const units = ["Infantry", "Tank", "Artillery", "MammothTank", "Harvester", "Gunship", "Interceptor"];
 
   for (const u of units) {
     it(`renders ${u} with direction and owner`, () => {
@@ -126,8 +127,28 @@ describe("Unit sprite rendering", () => {
     expect(() => drawUnitSprite(ctx, "Infantry", 50, 50, 18, 0, 0, 10, false, 0, -1, false)).not.toThrow();
   });
 
+  it("renders Gunship with hover bobbing, moving, and firing animations", () => {
+    expect(() => drawUnitSprite(ctx, "Gunship", 50, 50, 18, 0, 0, 10, false, 0, -1, false)).not.toThrow();
+    expect(() => drawUnitSprite(ctx, "Gunship", 50, 50, 18, 0, Math.PI / 2, 10, false, 0, -1, true)).not.toThrow();
+    expect(() => drawUnitSprite(ctx, "Gunship", 50, 50, 18, 0, 0, 10, false, 0, 0, true)).not.toThrow();
+    expect(() => drawUnitSprite(ctx, "Gunship", 50, 50, 18, 1, 0, 10, false, 0, 1, false)).not.toThrow();
+  });
+
+  it("renders Interceptor with afterburners, moving, and firing animations", () => {
+    expect(() => drawUnitSprite(ctx, "Interceptor", 50, 50, 18, 0, 0, 10, false, 0, -1, false)).not.toThrow();
+    expect(() => drawUnitSprite(ctx, "Interceptor", 50, 50, 18, 0, -Math.PI / 4, 10, false, 0, -1, true)).not.toThrow();
+    expect(() => drawUnitSprite(ctx, "Interceptor", 50, 50, 18, 0, 0, 10, false, 0, 0, true)).not.toThrow();
+    expect(() => drawUnitSprite(ctx, "Interceptor", 50, 50, 18, 1, 0, 10, true, 0, -1, false)).not.toThrow();
+  });
+
   it("renders Turret with firing recoil and flashes", () => {
     expect(() => drawBuildingSprite(ctx, "Turret", 100, 100, 18, 0, 0, 10, false, 0, 0, 0)).not.toThrow();
+  });
+
+  it("renders the tech-tier buildings", () => {
+    expect(() => drawBuildingSprite(ctx, "Radar", 100, 100, 18, 0, 0, 10)).not.toThrow();
+    expect(() => drawBuildingSprite(ctx, "TeslaCoil", 100, 100, 18, 0, 0, 10)).not.toThrow();
+    expect(() => drawBuildingSprite(ctx, "TeslaCoil", 100, 100, 18, 0, 0, 10, false, 0, 0, 2)).not.toThrow();
   });
 });
 
@@ -143,12 +164,31 @@ describe("Thumbnails and Tactical Icons", () => {
     const icons = [
       "damage", "Damage", "hp", "Hp", "sell", "Sell", "repair", "Repair",
       "tab_buildings", "tab_troops", "tab_vehicles", "tab_aircraft",
-      "airfield", "gunship", "interceptor",
+      "airfield", "radar", "teslacoil", "mammothtank", "range",
+      "gunship", "interceptor",
       "play", "pause", "fast_forward", "cross",
     ];
     for (const ic of icons) {
       expect(() => drawTacticalIcon(ctx, ic, 24, 24, 24, "#f59e0b")).not.toThrow();
     }
+  });
+
+  it("builds CSS cursor data URLs for the C&C tool cursors", () => {
+    const sell = getCursorDataUrl("sell");
+    const repair = getCursorDataUrl("repair");
+    const attack = getCursorDataUrl("attack");
+    // CSS cursor contract: with a DOM, a data URL plus a centered hotspot
+    // (real browsers embed the PNG; jsdom's canvas may yield an empty URL);
+    // without a DOM the helper degrades to the plain `default` cursor.
+    if (typeof document === "undefined") {
+      expect(sell).toBe("default");
+    } else {
+      for (const c of [sell, repair, attack]) {
+        expect(c.startsWith("url(")).toBe(true);
+        expect(c).toContain("16 16, auto");
+      }
+    }
+    expect(getCursorDataUrl("sell")).toBe(sell);
   });
 });
 

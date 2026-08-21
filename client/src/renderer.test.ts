@@ -1,7 +1,7 @@
 // Camera math: zoom bounds, map-bounds clamping, and viewport rects. Pure logic, no DOM.
 
 import { describe, expect, it } from "vitest";
-import { Camera, cameraViewRect, isBuildingPlacable, Renderer } from "./renderer";
+import { Camera, cameraViewRect, isAirUnit, isBuildingPlacable, isUnit, Renderer } from "./renderer";
 import { World } from "./world";
 
 describe("Camera", () => {
@@ -276,6 +276,60 @@ describe("isBuildingPlacable", () => {
       renderer.draw(mockCtx, world, new Set([1]), 800, 600, {
         waypoints: new Map(),
       });
+    }).not.toThrow();
+  });
+
+  it("correctly classifies all unit types including Gunship, Interceptor, and MammothTank", () => {
+    expect(isUnit({ id: 1, kind: "Harvester", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 2, kind: "Infantry", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 3, kind: "Tank", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 4, kind: "Artillery", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 5, kind: "MammothTank", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 6, kind: "Gunship", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 7, kind: "Interceptor", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isUnit({ id: 8, kind: "Hq", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(false);
+    expect(isUnit({ id: 9, kind: "Airfield", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(false);
+  });
+
+  it("correctly identifies air units", () => {
+    expect(isAirUnit({ id: 1, kind: "Gunship", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isAirUnit({ id: 2, kind: "Interceptor", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(true);
+    expect(isAirUnit({ id: 3, kind: "Tank", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(false);
+    expect(isAirUnit({ id: 4, kind: "Hq", owner: 0, x: 0, y: 0, hp: 100, maxHp: 100 })).toBe(false);
+  });
+
+  it("renders aircraft units in world without error", () => {
+    const world = new World();
+    world.setMap(1, new Array(64 * 64).fill(true), [[10, 10], [50, 50]]);
+    world.entities.set(1, { id: 1, kind: "Gunship", owner: 0, x: 12, y: 10, hp: 90, maxHp: 90 });
+    world.entities.set(2, { id: 2, kind: "Interceptor", owner: 0, x: 14, y: 12, hp: 70, maxHp: 70 });
+    world.entities.set(3, { id: 3, kind: "Gunship", owner: 1, x: 40, y: 40, hp: 90, maxHp: 90 });
+
+    const renderer = new Renderer();
+    const mockCtx = {
+      save: () => {},
+      restore: () => {},
+      beginPath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      stroke: () => {},
+      arc: () => {},
+      fillRect: () => {},
+      strokeRect: () => {},
+      setLineDash: () => {},
+      clearRect: () => {},
+      fill: () => {},
+      closePath: () => {},
+      translate: () => {},
+      rotate: () => {},
+      measureText: () => ({ width: 10 }),
+      fillText: () => {},
+      createLinearGradient: () => ({ addColorStop: () => {} }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+    } as unknown as CanvasRenderingContext2D;
+
+    expect(() => {
+      renderer.draw(mockCtx, world, new Set([1, 2]), 800, 600);
     }).not.toThrow();
   });
 });

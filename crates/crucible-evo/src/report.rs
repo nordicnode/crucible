@@ -141,6 +141,37 @@ pub struct ChangeReport {
     pub notes: Vec<String>,
 }
 
+/// Name a champion's playstyle era from its behavioral fingerprint (plan
+/// §6.2: "a simple classifier over fingerprints names playstyle eras").
+/// Purely heuristic; the notes in the change report carry the specifics.
+pub fn era_name(f: &Fingerprint) -> &'static str {
+    let first_kill_secs = f.first_kill_tick / 10.0;
+    // Aggression first: a very early first kill is the defining signal.
+    if f.matches > 0 && first_kill_secs < 90.0 {
+        return "The Rush Years";
+    }
+    // Defensive economy: many refineries and a late first kill.
+    if f.refineries >= 2.0 && first_kill_secs > 300.0 {
+        return "The Turtle Dynasty";
+    }
+    // Composition-dominant eras (most-built unit class wins the name).
+    let (inf, tnk, art) = (f.infantry, f.tanks, f.artillery);
+    if art > tnk && art > inf {
+        return "The Siege Dynasty";
+    }
+    if tnk > inf && tnk > art {
+        return "The Armored Age";
+    }
+    if inf > tnk && inf > art {
+        return "The Legion Era";
+    }
+    // Economy-heavy (bank before army).
+    if f.economy_spend > f.army_spend && f.army_spend > 0.0 {
+        return "The Banker Era";
+    }
+    "The Balanced Era"
+}
+
 /// Compare `old` (dethroned) to `new` (incoming) champion and produce notes.
 pub fn diff(old: &Fingerprint, new: &Fingerprint) -> ChangeReport {
     let mut notes = Vec::new();
@@ -237,6 +268,53 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.matches, 2);
         assert!(a.duration_ticks > 0.0);
+    }
+
+    #[test]
+    fn era_names_cover_the_classifier() {
+        let rush = Fingerprint {
+            matches: 4,
+            first_kill_tick: 500.0,
+            ..Fingerprint::default()
+        };
+        assert_eq!(era_name(&rush), "The Rush Years");
+
+        let turtle = Fingerprint {
+            matches: 4,
+            first_kill_tick: 4000.0,
+            refineries: 3.0,
+            ..Fingerprint::default()
+        };
+        assert_eq!(era_name(&turtle), "The Turtle Dynasty");
+
+        let siege = Fingerprint {
+            matches: 4,
+            first_kill_tick: 2000.0,
+            artillery: 6.0,
+            tanks: 2.0,
+            ..Fingerprint::default()
+        };
+        assert_eq!(era_name(&siege), "The Siege Dynasty");
+
+        let armored = Fingerprint {
+            matches: 4,
+            first_kill_tick: 2000.0,
+            tanks: 8.0,
+            infantry: 3.0,
+            ..Fingerprint::default()
+        };
+        assert_eq!(era_name(&armored), "The Armored Age");
+
+        let banker = Fingerprint {
+            matches: 4,
+            first_kill_tick: 2000.0,
+            economy_spend: 900.0,
+            army_spend: 400.0,
+            ..Fingerprint::default()
+        };
+        assert_eq!(era_name(&banker), "The Banker Era");
+
+        assert_eq!(era_name(&Fingerprint::default()), "The Balanced Era");
     }
 
     #[test]

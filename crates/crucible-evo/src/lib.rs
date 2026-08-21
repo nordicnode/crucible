@@ -23,14 +23,14 @@ pub use balance::{
 };
 pub use curriculum::{Curriculum, CurriculumConfig, Stage};
 pub use fitness::{
-    army_value, evaluate_economy, evaluate_production, evaluate_vs, self_play_fitness,
-    shaped_fitness, spent_value, Noop,
+    army_value, evaluate_economy, evaluate_production, evaluate_vs, head_to_head, outcome_for,
+    self_play_fitness, shaped_fitness, spent_value, Noop,
 };
 pub use gauntlet::{run_gauntlet, should_promote, GauntletConfig, GauntletResult};
 pub use ghost::{ghost_fitness, Ghost, GhostEntry, GhostPool};
 pub use league::{update, EloHistory, Outcome, K};
 pub use lineage::{BornFrom, Lineage, LineageRecord};
 pub use population::{EsParams, Population};
-pub use report::{change_report, diff, fingerprint, ChangeReport, Fingerprint};
+pub use report::{change_report, diff, era_name, fingerprint, ChangeReport, Fingerprint};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

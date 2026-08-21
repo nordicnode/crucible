@@ -88,10 +88,13 @@ impl Game {
                     (b.x + (dx * push / d) as i32, b.y + (dy * push / d) as i32)
                 };
                 let (tx, ty) = (crate::fixed::fix_to_tile(nx), crate::fixed::fix_to_tile(ny));
+                // Aircraft are not blocked by buildings, so they can be pushed
+                // over one; ground units still must land on open terrain.
+                let fly = unit_stats(self.units[j].utype).air;
                 if tx < 64
                     && ty < 64
                     && self.map.is_passable(tx, ty)
-                    && !blocked[crate::map::tile_index(tx, ty)]
+                    && (fly || !blocked[crate::map::tile_index(tx, ty)])
                 {
                     self.units[j].pos = Pos::new(nx, ny);
                 }
@@ -183,7 +186,12 @@ impl Game {
         };
         let path = if let UnitOrder::Move { waypoint, .. } = order {
             self.map
-                .find_path((tile.0, tile.1), waypoint.tile(), &self.blocked_grid())
+                .find_path(
+                    (tile.0, tile.1),
+                    waypoint.tile(),
+                    &self.blocked_grid(),
+                    stats.air,
+                )
                 .unwrap_or_default()
         } else {
             Vec::new()

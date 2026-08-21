@@ -2,10 +2,10 @@
 // The client never implements game rules; it only renders fogged state and
 // sends the same commands the sim validates.
 
-export type BuildingType = "Hq" | "PowerPlant" | "Refinery" | "Barracks" | "Factory" | "TechLab" | "Airfield" | "Turret";
-export type UnitType = "Harvester" | "Infantry" | "Tank" | "Artillery";
+export type BuildingType = "Hq" | "PowerPlant" | "Refinery" | "Barracks" | "Factory" | "TechLab" | "Airfield" | "Radar" | "TeslaCoil" | "Turret";
+export type UnitType = "Harvester" | "Infantry" | "Tank" | "Artillery" | "MammothTank" | "Gunship" | "Interceptor";
 export type Stance = "Aggressive" | "Cautious" | "Hold";
-export type Upgrade = "None" | "Damage" | "Hp";
+export type Upgrade = "None" | "Damage" | "Hp" | "Range";
 
 // The server's serde format serializes `Player` as the variant name ("P0" /
 // "P1"), so commands must carry the string, not an index.
@@ -15,6 +15,7 @@ export type Command =
   | { PlaceBuilding: { player: Player; btype: BuildingType; tile: [number, number] } }
   | { TrainUnit: { player: Player; building: number; utype: UnitType } }
   | { MoveGroup: { player: Player; units: number[]; waypoint: [number, number]; stance: Stance } }
+  | { Attack: { player: Player; units: number[]; target: number } }
   | { SetRally: { player: Player; building: number; waypoint: [number, number] } }
   | { ChooseUpgrade: { player: Player; lab: number; upgrade: Upgrade } }
   | { Sell: { player: Player; building: number } }
@@ -30,6 +31,10 @@ export function trainUnit(building: number, utype: UnitType): Command {
 }
 export function moveGroup(units: number[], waypoint: [number, number], stance: Stance = "Aggressive"): Command {
   return { MoveGroup: { player: PLAYER, units, waypoint, stance } };
+}
+/** Focus-fire a specific enemy entity with the given units (C&C right-click). */
+export function attack(units: number[], target: number): Command {
+  return { Attack: { player: PLAYER, units, target } };
 }
 export function setRally(building: number, waypoint: [number, number]): Command {
   return { SetRally: { player: PLAYER, building, waypoint } };
@@ -86,13 +91,15 @@ export type ServerMsg =
       ore: number;
       powerProduced?: number;
       powerConsumed?: number;
+      upgrade?: Upgrade;
       entities: DiffEntity[];
       oreTiles: OreTile[];
       visible: number[];
       events: DiffEvent[];
     }
   | { type: "commandRejected"; index: number; reason: string }
-  | { type: "matchEnd"; winner: number | null; reason: string | null; durationTicks: number; replayId: number | null };
+  | { type: "matchEnd"; winner: number | null; reason: string | null; durationTicks: number; replayId: number | null }
+  | { type: "serverBusy" };
 
 export type ClientMsg =
   | { type: "joinMatch"; opponent: string }
@@ -105,6 +112,8 @@ export const BUILD_COSTS: Record<string, number> = {
   Factory: 250,
   TechLab: 200,
   Airfield: 250,
+  Radar: 150,
+  TeslaCoil: 250,
   Turret: 100,
 };
 
@@ -116,6 +125,8 @@ export const BUILDING_POWER: Record<string, { produces: number; consumes: number
   Factory: { produces: 0, consumes: 25 },
   TechLab: { produces: 0, consumes: 30 },
   Airfield: { produces: 0, consumes: 25 },
+  Radar: { produces: 0, consumes: 10 },
+  TeslaCoil: { produces: 0, consumes: 30 },
   Turret: { produces: 0, consumes: 20 },
 };
 
@@ -124,7 +135,10 @@ export const UNIT_COSTS: Record<string, number> = {
   Infantry: 50,
   Tank: 150,
   Artillery: 200,
+  MammothTank: 400,
+  Gunship: 250,
+  Interceptor: 300,
 };
 
-export const UNIT_KINDS = new Set(["Harvester", "Infantry", "Tank", "Artillery"]);
-export const BUILDING_KINDS = new Set(["Hq", "PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Turret"]);
+export const UNIT_KINDS = new Set(["Harvester", "Infantry", "Tank", "Artillery", "MammothTank", "Gunship", "Interceptor"]);
+export const BUILDING_KINDS = new Set(["Hq", "PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Radar", "TeslaCoil", "Turret"]);

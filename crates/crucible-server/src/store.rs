@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS matches (
@@ -97,6 +97,9 @@ pub struct StoredChampion {
     pub crowned_at: i64,
     pub dethroned_at: Option<i64>,
     pub gauntlet_record: Option<serde_json::Value>,
+    /// §6.2 playstyle-era name (computed at promotion from the champion's
+    /// behavioral fingerprint); older champions may have none.
+    pub era: Option<String>,
 }
 
 impl StoredChampion {
@@ -149,6 +152,10 @@ impl Store {
     pub fn open(path: &str) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The store is a single mutex-guarded connection, but a concurrent
+        // external process (e.g. a `sqlite3` inspection) can still lock the
+        // file; wait instead of failing with SQLITE_BUSY.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         migrate(&conn)?;
         Ok(Store {
             conn: Mutex::new(conn),
@@ -159,6 +166,7 @@ impl Store {
     #[allow(dead_code)]
     pub fn in_memory() -> Result<Self, rusqlite::Error> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         migrate(&conn)?;
         Ok(Store {
             conn: Mutex::new(conn),
@@ -217,6 +225,65 @@ impl Store {
                 duration_ticks: row.get(5)?,
                 created_at: row.get(6)?,
             })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+    }
+
+    /// Fetch matches **and** their replay JSON in a single query. The ghost
+    /// pool needs both; looping [`Store::get_replay`] per row would do an
+    /// N+1 query against the mutex.
+    pub fn list_matches_with_replay(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<(StoredMatch, String)>, rusqlite::Error> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, map_seed, p1_type, p2_type, result, duration_ticks, created_at, replay
+             FROM matches ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok((
+                StoredMatch {
+                    id: row.get(0)?,
+                    map_seed: row.get::<_, i64>(1)? as u64,
+                    p1_type: row.get(2)?,
+                    p2_type: row.get(3)?,
+                    result: row.get(4)?,
+                    duration_ticks: row.get(5)?,
+                    created_at: row.get(6)?,
+                },
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+    }
+
+    /// Fetch matches (with replay JSON) with `id > since`, ascending — the
+    /// incremental ghost-pool refresh: new human matches played since the last
+    /// load become training ghosts without a server restart.
+    pub fn list_matches_with_replay_since(
+        &self,
+        since: i64,
+        limit: u32,
+    ) -> Result<Vec<(StoredMatch, String)>, rusqlite::Error> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, map_seed, p1_type, p2_type, result, duration_ticks, created_at, replay
+             FROM matches WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map([since, limit as i64], |row| {
+            Ok((
+                StoredMatch {
+                    id: row.get(0)?,
+                    map_seed: row.get::<_, i64>(1)? as u64,
+                    p1_type: row.get(2)?,
+                    p2_type: row.get(3)?,
+                    result: row.get(4)?,
+                    duration_ticks: row.get(5)?,
+                    created_at: row.get(6)?,
+                },
+                row.get::<_, String>(7)?,
+            ))
         })?;
         rows.collect::<Result<Vec<_>, _>>()
     }
@@ -328,6 +395,7 @@ impl Store {
         genome_id: i64,
         generation: u32,
         gauntlet_record: Option<serde_json::Value>,
+        era: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let now = unix_now();
@@ -337,9 +405,9 @@ impl Store {
         )?;
         let record_json = gauntlet_record.map(|v| v.to_string());
         conn.execute(
-            "INSERT INTO champions (genome_id, generation, crowned_at, dethroned_at, gauntlet_record)
-             VALUES (?1, ?2, ?3, NULL, ?4)",
-            rusqlite::params![genome_id, generation, now, record_json],
+            "INSERT INTO champions (genome_id, generation, crowned_at, dethroned_at, gauntlet_record, era)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5)",
+            rusqlite::params![genome_id, generation, now, record_json, era],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -348,7 +416,7 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         row_champion(
             &conn,
-            "SELECT id, genome_id, generation, crowned_at, dethroned_at, gauntlet_record
+            "SELECT id, genome_id, generation, crowned_at, dethroned_at, gauntlet_record, era
              FROM champions WHERE dethroned_at IS NULL ORDER BY crowned_at DESC LIMIT 1",
             [],
         )
@@ -357,7 +425,7 @@ impl Store {
     pub fn list_champions(&self) -> Result<Vec<StoredChampion>, rusqlite::Error> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT id, genome_id, generation, crowned_at, dethroned_at, gauntlet_record
+            "SELECT id, genome_id, generation, crowned_at, dethroned_at, gauntlet_record, era
              FROM champions ORDER BY crowned_at ASC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -370,6 +438,55 @@ impl Store {
                 gauntlet_record: row
                     .get::<_, Option<String>>(5)?
                     .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+                era: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+    }
+
+    /// Total champions ever crowned (the museum archive's count for paging).
+    pub fn count_champions(&self) -> Result<i64, rusqlite::Error> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.query_row("SELECT COUNT(*) FROM champions", [], |row| row.get(0))
+    }
+
+    /// A page of champions ordered by a whitelisted sort key (safe from SQL
+    /// injection — the key is matched, never interpolated). Elo sorting reads
+    /// each genome's latest rating via a correlated subquery.
+    pub fn list_champions_paged(
+        &self,
+        sort: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<StoredChampion>, rusqlite::Error> {
+        let order_sql = match sort {
+            "crowned_desc" => "ORDER BY crowned_at DESC, id DESC",
+            "generation_desc" => "ORDER BY generation DESC, crowned_at DESC",
+            "elo_desc" => {
+                "ORDER BY (SELECT e.elo FROM elo_history e WHERE e.genome_id = c.genome_id \
+                 ORDER BY e.at DESC LIMIT 1) IS NULL, \
+                 (SELECT e.elo FROM elo_history e WHERE e.genome_id = c.genome_id \
+                 ORDER BY e.at DESC LIMIT 1) DESC, c.id DESC"
+            }
+            _ => "ORDER BY crowned_at ASC, id ASC",
+        };
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let sql = format!(
+            "SELECT c.id, c.genome_id, c.generation, c.crowned_at, c.dethroned_at, \
+             c.gauntlet_record, c.era FROM champions c {order_sql} LIMIT ?1 OFFSET ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![limit, offset], |row| {
+            Ok(StoredChampion {
+                id: row.get(0)?,
+                genome_id: row.get(1)?,
+                generation: row.get(2)?,
+                crowned_at: row.get(3)?,
+                dethroned_at: row.get(4)?,
+                gauntlet_record: row
+                    .get::<_, Option<String>>(5)?
+                    .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+                era: row.get(6)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -569,6 +686,19 @@ impl Store {
     }
 }
 
+/// Canonical label for the `matches.result` column: `"P0"`, `"P1"`, or
+/// `"draw"`. Older rows may hold Debug-formatted values (e.g. `"Some(0)"`)
+/// from before this format; consumers should only treat the exact labels as
+/// decisive. `"abandoned"` (a disconnected mid-match replay) is written by
+/// the WS loop, not produced here.
+pub fn result_label(winner: Option<crucible_sim::Player>) -> String {
+    match winner {
+        Some(crucible_sim::Player::P0) => "P0".to_string(),
+        Some(crucible_sim::Player::P1) => "P1".to_string(),
+        None => "draw".to_string(),
+    }
+}
+
 fn row_champion(
     conn: &Connection,
     sql: &str,
@@ -584,10 +714,17 @@ fn row_champion(
             gauntlet_record: row
                 .get::<_, Option<String>>(5)?
                 .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)),
+            era: row.get(6)?,
         })
     })
     .optional()
 }
+
+/// §6.2: each champion carries a playstyle-era name computed from its
+/// behavioral fingerprint at promotion time (a nullable column so older DBs
+/// migrate cleanly and eras stay backward compatible).
+const MIGRATION_V4: &str = "
+ALTER TABLE champions ADD COLUMN era TEXT;";
 
 fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -599,6 +736,9 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     if version < 3 {
         conn.execute_batch(&format!("BEGIN; {MIGRATION_V3} COMMIT;"))?;
+    }
+    if version < 4 {
+        conn.execute_batch(&format!("BEGIN; {MIGRATION_V4} COMMIT;"))?;
     }
     if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -616,6 +756,34 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_match_fetch_returns_only_newer_rows() {
+        let store = Store::in_memory().unwrap();
+        for seed in 1..=5u64 {
+            store
+                .save_match(seed, "human", "bot:hard", "P0", 100, "{}")
+                .unwrap();
+        }
+
+        // Full fetch is newest-first (id DESC).
+        let all = store.list_matches_with_replay(10).unwrap();
+        assert_eq!(all.len(), 5);
+        assert_eq!(all[0].0.id, 5);
+
+        // Incremental fetch after the first three rows: exactly the rest,
+        // ascending (id 4, 5).
+        let since = store.list_matches(10).unwrap()[2].id; // id of the 3rd newest
+        let inc = store.list_matches_with_replay_since(since, 10).unwrap();
+        assert_eq!(inc.len(), 2);
+        assert_eq!(inc[0].0.id, since + 1);
+        assert_eq!(inc[1].0.id, since + 2);
+
+        // Limit applies.
+        let limited = store.list_matches_with_replay_since(0, 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].0.id, 1);
+    }
 
     #[test]
     fn save_and_load_replay_round_trips() {
@@ -642,10 +810,10 @@ mod tests {
             .save_genome(1, Some(a), "mutant", &[0.4, 0.5])
             .unwrap();
 
-        store.crown_champion(a, 0, None).unwrap();
+        store.crown_champion(a, 0, None, None).unwrap();
         assert_eq!(store.get_reigning_champion().unwrap().unwrap().genome_id, a);
 
-        store.crown_champion(b, 1, None).unwrap();
+        store.crown_champion(b, 1, None, None).unwrap();
         let champions = store.list_champions().unwrap();
         assert_eq!(champions.len(), 2);
         assert!(champions.iter().all(|c| c.reigning() == (c.genome_id == b)));

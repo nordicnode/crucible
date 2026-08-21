@@ -15,11 +15,16 @@ use crate::game::Game;
 use crate::map::MAP_TILES;
 use crate::movement::step_towards;
 
-/// Fallback deposit radius when a refinery has no passable dock tile.
-const DROP_RADIUS: i32 = FIX_SCALE * 2;
+/// Fallback deposit radius when a refinery has no passable dock tile: the
+/// harvester must be adjacent to the refinery building itself — ore is
+/// physically loaded into the refinery, never transferred from a distance
+/// (this fallback used to be 2 tiles, which read as "dumping from across the
+/// base").
+const DROP_RADIUS: i32 = FIX_SCALE;
 /// Distance from the dock center within which a harvester counts as docked.
 /// 1.5 tiles gives a small fleet room to park at the front simultaneously
-/// (units separate at 0.5 tiles), so the dock doesn't become a queue.
+/// (units separate at 0.5 tiles), so the dock doesn't become a queue — but
+/// unload still happens at the hopper, never from a distance.
 const DOCK_RADIUS: i32 = FIX_SCALE * 3 / 2;
 const MINE_RADIUS: i32 = FIX_SCALE * 3 / 4;
 /// Radius at which harvesters flee from enemy units. Deliberately tight (2
@@ -126,7 +131,7 @@ impl Game {
                             if dist2(pos.x, pos.y, dpos.x, dpos.y)
                                 <= (DOCK_RADIUS as i64) * (DOCK_RADIUS as i64)
                             {
-                                // Docked at the refinery's front: park for 2 s,
+                                // Docked on the refinery's front tile: park,
                                 // then unload and go back to mining.
                                 if park_ticks >= DEPOSIT_PARK_TICKS {
                                     deposit = carrying;
@@ -143,7 +148,8 @@ impl Game {
                                 new_pos = p;
                             }
                         } else {
-                            // No passable dock: deposit from range as a fallback.
+                            // No passable dock: deposit only if adjacent to the
+                            // refinery itself (never from a distance).
                             let bpos = b.pos();
                             if dist2(pos.x, pos.y, bpos.x, bpos.y)
                                 <= (DROP_RADIUS as i64) * (DROP_RADIUS as i64)
@@ -254,15 +260,16 @@ fn follow(
     speed: i32,
 ) -> (Pos, bool) {
     if path.is_empty() {
-        if let Some(p) = map.find_path(pos.tile(), dest.tile(), blocked) {
+        // Harvesters are ground units: building blockers apply.
+        if let Some(p) = map.find_path(pos.tile(), dest.tile(), blocked, false) {
             *path = p;
         }
     }
     let Some(next) = path.first().copied() else {
-        return (step_towards(map, blocked, pos, dest, speed).0, true);
+        return (step_towards(map, blocked, pos, dest, speed, false).0, true);
     };
     let ndest = Pos::from_tile(next.0, next.1);
-    let (p, arrived) = step_towards(map, blocked, pos, ndest, speed);
+    let (p, arrived) = step_towards(map, blocked, pos, ndest, speed, false);
     if arrived || p.tile() == next {
         path.remove(0);
     }

@@ -18,7 +18,8 @@ gets countered before you sit down again.
   step-by-step in the browser, unfogged, with play / pause / speed / scrub.
 - **Feed it ghosts.** Your matches are replayed during training as frozen
   "ghost" opponents, so the strategy that beat you becomes tomorrow's training
-  data.
+  data — adopted into the pool live, no server restart needed. Matches where
+  you beat the reigning champion get priority retraining weight.
 - **Auto-battle ancestors.** Pit the current champion against any past champion
   and spectate the result.
 
@@ -46,11 +47,25 @@ champion, start the trainer too (see *Training the AI* below).
 ## How to play
 
 - **Left-click** to select; **drag a box** to select several (hold **Shift** to add).
-- **Right-click** to move / attack-move; on a building it sets its rally point.
+- **Right-click** to move / attack-move; **right-click an enemy unit or
+  building to focus-fire it** (the selected combat units lock onto that one
+  target and ignore everything else, C&C-style); right-click on one of your
+  own production buildings sets its rally point.
 - **Middle-drag** pans the camera, **mouse wheel** zooms, **Esc** cancels placement.
 - Select a building to train units, research upgrades (Tech Lab), or sell it.
-  With nothing selected, the build panel offers Refinery, Barracks, Factory,
-  Tech Lab, and Turret.
+  With nothing selected, the build panel offers PowerPlant, Refinery,
+  Barracks, Factory, Tech Lab, Airfield, Radar, Tesla Coil, and Turret.
+  Tech Lab and Airfield require a Factory; **Radar and Tesla Coil are the
+  second tier and require the Tech Lab itself**. The Tech Lab also unlocks
+  three research tracks — High-Explosive (+15% damage), Reinforced Armor
+  (+15% HP), and Extended Range (+20% range) — one per player, chosen from
+  the lab's command card. The Airfield trains Gunships and Interceptors from
+  the aircraft tab — aircraft fly **over buildings** (though not over map
+  terrain), so they can strike straight through a base's walls and turret
+  line, and everything on the ground can still shoot them down.
+- C&C-style cursors: hovering an enemy with attack-capable units selected
+  shows a red targeting reticle; the Sell tool shows a **$** over sellable
+  buildings and Repair shows a **wrench** over damaged ones.
 - Buildings must be placed within a few tiles of an existing one, so your base
   grows as a connected clump (the placement ghost turns green when the spot is
   valid, red when it isn't).
@@ -62,16 +77,28 @@ Refinery (watch the `workers` counter and the `+N/s` income readout in the
 top bar — income comes only from harvester deposits; refineries give no
 passive trickle).
 
-Destroy the enemy HQ to win. If the clock runs out, the side with more
-remaining value wins.
+Watch the power readout too: the HQ and PowerPlants produce power, while
+Refineries, Barracks, Factories, Tech Labs, Airfields, and Turrets drain it.
+If consumption ever exceeds production, your production lines slow to half
+speed — build a PowerPlant to lift the cap, the same way the AI does.
+
+Destroy the enemy HQ to win. Matches have no time limit — the game ends only
+when an HQ falls (training matches keep an internal cap so a degenerate
+self-play game can't run forever).
 
 ## The game
 
-One resource (ore), six buildings (HQ, Refinery, Barracks, Factory, Tech Lab,
-Turret), four units (Harvester, Infantry, Tank, and Artillery, which needs a
-Tech Lab), on procedurally generated 64×64 maps. The simulation runs at a fixed
-10 ticks per second with a ~15-minute match cap and is fully deterministic and
-server-authoritative.
+One resource (ore), ten buildings (HQ, PowerPlant, Refinery, Barracks,
+Factory, Tech Lab, Airfield, Radar, Tesla Coil, and Turret), seven units
+(Harvester, Infantry, Tank, Artillery, Mammoth Tank — the three vehicles and
+the mammoth need a Tech Lab — plus Gunship and Interceptor, which need an
+Airfield), on procedurally generated 64×64 maps. Radar dishes reveal a huge
+swath of the battlefield passively; Tesla Coils are long-range arc turrets.
+Maps are point-symmetric (spawn fairness is a theorem) with rich ore-field
+cores, occasional mid-field rocks for cover, and varied expansion-site sizes.
+The simulation runs at a fixed 10 ticks per second and is fully
+deterministic and server-authoritative. Harvesters must dock at a Refinery to
+unload ore — they cannot transfer it from a distance.
 
 ## Training the AI
 
@@ -92,7 +119,14 @@ CRUCIBLE_TRAINER=1 CRUCIBLE_TRAINER_SMALL=1 CRUCIBLE_TRAINER_GENERATIONS=5 cargo
 | `CRUCIBLE_TRAINER_BOOTSTRAP=1` | run the staged curriculum on a cold start |
 | `CRUCIBLE_TRAINER_GENERATIONS=N` | stop after N generations (fast-forward) |
 | `CRUCIBLE_TRAINER_SMALL=1` | small, fast population for demos |
+| `CRUCIBLE_TRAINER_THREADS=N` | cap the evaluation worker pool (default: every core) |
 | `CRUCIBLE_DB=path` | SQLite file (default `data/crucible.db`) |
+
+Evaluation is **parallel across all cores**: each generation's matches are
+embarrassingly parallel and deterministic, so the exact same results come out
+bit-identical whether you run 1 thread or 64 — parallel just makes it faster
+(measured ~2.7× on 6 cores at the small population; near-linear at the default
+64-genome population). The bootstrap curriculum uses the same thread pool.
 
 Progress (population, champion, Elo, replays) is checkpointed in SQLite and
 resumes across restarts. Delete `data/crucible.db` for a fresh cold start.
@@ -103,7 +137,11 @@ and `http://127.0.0.1:8787/api/champion` (current champion + Elo).
 ## How the AI works
 
 - **The commander, not the soldier.** The evolvable brain is a small neural
-  network (~12k weights) that makes strategic decisions on a 2-second tick:
+  network that learned to **focus-fire**: one of its army actions is a snipe
+  that picks a target type (harvester / refinery / HQ / factory) and locks the
+  army onto the best visible enemy of that kind, so it can raid economies and
+  finish bases — not just attack-move. (The network
+ (~12k weights) that makes strategic decisions on a 2-second tick:
   build, train, expand, attack. Individual units run scripted micro. It plays
   with the same fog of war and APM limit you do. Your own commands are applied
   immediately (within one 100 ms tick), so the game stays responsive even

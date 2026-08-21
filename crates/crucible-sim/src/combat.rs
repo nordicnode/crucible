@@ -96,8 +96,12 @@ impl Game {
         let enemies = self.enemies_of(enemy);
 
         let vision2 = (stats.vision as i64) * (stats.vision as i64);
-        let range2 = (stats.range as i64) * (stats.range as i64);
+        // The Range research scales the unit's effective fire range (min range
+        // is left alone so artillery still has a dead zone).
+        let range = apply_range_upgrade(stats.range, self.upgrades[owner.index()]);
+        let range2 = (range as i64) * (range as i64);
         let min_range2 = (stats.min_range as i64) * (stats.min_range as i64);
+        let fly = stats.air;
 
         if let Some(t) = target {
             let valid = enemies
@@ -113,15 +117,36 @@ impl Game {
 
         let mut new_pos = pos;
         let mut new_target = target;
+        let mut new_order = order.clone();
         let mut damage: Vec<(EntityId, bool, i32)> = Vec::new(); // (id, is_building, amount)
         let mut new_cooldown = cooldown;
 
         let new_fleeing = if should_flee {
             let dest = self.flee_dest(owner, pos);
-            new_pos = self.move_along_path(blocked, &mut path, pos, dest, stats.speed);
+            new_pos = self.move_along_path(blocked, &mut path, pos, dest, stats.speed, fly);
             true
         } else {
-            if new_target.is_none() {
+            // An explicit Attack order overrides auto-acquire: the unit locks
+            // onto the single ordered target and ignores everything else. The
+            // order lapses (back to Idle) once the target dies or leaves
+            // vision, after which normal auto-acquire resumes.
+            let forced_target: Option<EntityId> = match order {
+                UnitOrder::Attack { target } => {
+                    let valid = enemies.iter().any(|e| {
+                        e.id == target && dist2(pos.x, pos.y, e.pos.x, e.pos.y) <= vision2
+                    });
+                    if valid {
+                        Some(target)
+                    } else {
+                        new_order = UnitOrder::Idle;
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(t) = forced_target {
+                new_target = Some(t);
+            } else if new_target.is_none() {
                 let in_range = enemies
                     .iter()
                     .filter(|e| {
@@ -154,10 +179,23 @@ impl Game {
 
                     if stats.min_range > 0 && d2 < min_range2 {
                         if can_chase {
-                            new_pos = step_away(&self.map, blocked, pos, tpos, stats.speed);
+                            new_pos = step_away(&self.map, blocked, pos, tpos, stats.speed, fly);
                         }
                     } else if !in_fire_range && can_chase {
-                        new_pos = step_direct(&self.map, blocked, pos, tpos, stats.speed);
+                        if matches!(order, UnitOrder::Attack { .. }) {
+                            // Focus-fire orders path around obstacles instead of
+                            // sliding along walls toward the target.
+                            new_pos = self.move_along_path(
+                                blocked,
+                                &mut path,
+                                pos,
+                                tpos,
+                                stats.speed,
+                                fly,
+                            );
+                        } else {
+                            new_pos = step_direct(&self.map, blocked, pos, tpos, stats.speed, fly);
+                        }
                     }
 
                     if in_fire_range && new_cooldown <= 0 {
@@ -177,13 +215,14 @@ impl Game {
                     }
                 }
             } else if let UnitOrder::Move { waypoint, .. } = order {
-                new_pos = self.move_along_path(blocked, &mut path, pos, waypoint, stats.speed);
+                new_pos = self.move_along_path(blocked, &mut path, pos, waypoint, stats.speed, fly);
             }
             false
         };
 
         self.units[idx].pos = new_pos;
         self.units[idx].target = new_target;
+        self.units[idx].order = new_order;
         self.units[idx].fleeing = new_fleeing;
         self.units[idx].cooldown = new_cooldown.max(0);
         self.units[idx].path = path;
@@ -203,7 +242,8 @@ impl Game {
         let pos = self.buildings[idx].pos();
         let cooldown = self.buildings[idx].cooldown;
 
-        let range2 = (stats.range as i64) * (stats.range as i64);
+        let range = apply_range_upgrade(stats.range, self.upgrades[owner.index()]);
+        let range2 = (range as i64) * (range as i64);
         let mut fired = false;
 
         let enemies = self.enemies_of(enemy);
@@ -253,17 +293,18 @@ impl Game {
         pos: Pos,
         dest: Pos,
         speed: i32,
+        fly: bool,
     ) -> Pos {
         if path.is_empty() {
-            if let Some(p) = self.map.find_path(pos.tile(), dest.tile(), blocked) {
+            if let Some(p) = self.map.find_path(pos.tile(), dest.tile(), blocked, fly) {
                 *path = p;
             }
         }
         let Some(next) = path.first().copied() else {
-            return step_direct(&self.map, blocked, pos, dest, speed);
+            return step_direct(&self.map, blocked, pos, dest, speed, fly);
         };
         let ndest = Pos::from_tile(next.0, next.1);
-        let (p, arrived) = step_towards(&self.map, blocked, pos, ndest, speed);
+        let (p, arrived) = step_towards(&self.map, blocked, pos, ndest, speed, fly);
         if arrived || p.tile() == next {
             path.remove(0);
         }
@@ -278,16 +319,37 @@ fn apply_damage_upgrade(damage: i32, upgrade: Upgrade) -> i32 {
     }
 }
 
-fn step_direct(map: &crate::map::Map, blocked: &[bool], pos: Pos, dest: Pos, speed: i32) -> Pos {
-    step_towards(map, blocked, pos, dest, speed).0
+fn apply_range_upgrade(range: crate::fixed::Fix, upgrade: Upgrade) -> crate::fixed::Fix {
+    match upgrade {
+        Upgrade::Range => range * 120 / 100,
+        _ => range,
+    }
 }
 
-fn step_away(map: &crate::map::Map, blocked: &[bool], pos: Pos, from: Pos, speed: i32) -> Pos {
+fn step_direct(
+    map: &crate::map::Map,
+    blocked: &[bool],
+    pos: Pos,
+    dest: Pos,
+    speed: i32,
+    fly: bool,
+) -> Pos {
+    step_towards(map, blocked, pos, dest, speed, fly).0
+}
+
+fn step_away(
+    map: &crate::map::Map,
+    blocked: &[bool],
+    pos: Pos,
+    from: Pos,
+    speed: i32,
+    fly: bool,
+) -> Pos {
     let dx = pos.x as i64 - from.x as i64;
     let dy = pos.y as i64 - from.y as i64;
     if dx == 0 && dy == 0 {
         return pos;
     }
     let dest = Pos::new(pos.x + dx as i32, pos.y + dy as i32);
-    step_towards(map, blocked, pos, dest, speed).0
+    step_towards(map, blocked, pos, dest, speed, fly).0
 }

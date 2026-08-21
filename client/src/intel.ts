@@ -33,6 +33,12 @@ export function friendlyBuildingCompleteMsg(btype: string): string {
       return "Defense Turret online";
     case "techlab":
       return "TechLab active";
+    case "airfield":
+      return "Airfield online";
+    case "radar":
+      return "Radar array online";
+    case "teslacoil":
+      return "Tesla Coil charged";
     default:
       return `${btype} complete`;
   }
@@ -49,6 +55,12 @@ export function friendlyUnitReadyMsg(utype: string): string {
       return "Tank roll out";
     case "artillery":
       return "Artillery operational";
+    case "gunship":
+      return "Gunship airborne";
+    case "interceptor":
+      return "Interceptor scrambled";
+    case "mammothtank":
+      return "Mammoth Tank deployed";
     default:
       return `${utype} ready for orders`;
   }
@@ -91,72 +103,52 @@ export class IntelLogger {
 
   /**
    * Process incoming Server DiffEvents. Returns added entry if any.
+   *
+   * The server only sends events belonging to the human player (P0), so the
+   * friendly branches below are the only ones that can ever fire; enemy
+   * activity arrives via fog observations and entity-destruction detection
+   * instead.
    */
   processDiffEvent(ev: DiffEvent): IntelLogEntry | null {
-    // 1. Explicitly ignore spammy economy events (ore deposits)
+    // Explicitly ignore spammy economy events (ore deposits)
     if (ev.kind === "ore_deposited") {
       return null;
     }
 
-    const player = ev.player ?? 0;
-    const isFriendly = player === 0;
-
-    // 2. Building placed / constructed
+    // Building placed / constructed
     if (ev.kind.startsWith("built:")) {
       const btype = ev.kind.slice(6);
-      if (isFriendly) {
-        return this.addEntry(
-          ev.tick,
-          friendlyBuildingCompleteMsg(btype),
-          "prod",
-          "BASE",
-        );
-      } else {
-        return this.addEntry(
-          ev.tick,
-          `Enemy ${btype} detected`,
-          "warn",
-          "HOSTILE",
-        );
-      }
+      return this.addEntry(
+        ev.tick,
+        friendlyBuildingCompleteMsg(btype),
+        "prod",
+        "BASE",
+      );
     }
 
-    // 3. Unit trained / complete
+    // Unit trained / complete
     if (ev.kind.startsWith("trained:")) {
       const utype = ev.kind.slice(8);
-      if (isFriendly) {
-        return this.addEntry(
-          ev.tick,
-          friendlyUnitReadyMsg(utype),
-          "prod",
-          "UNIT",
-        );
-      }
-      // Enemy training in fog is not logged to player's intel log
-      return null;
+      return this.addEntry(ev.tick, friendlyUnitReadyMsg(utype), "prod", "UNIT");
     }
 
-    // 4. Upgrade chosen / researched
+    // Upgrade chosen / researched
     if (ev.kind.startsWith("upgrade")) {
-      if (isFriendly) {
-        let msg = "Upgrade research complete";
-        if (ev.kind === "upgrade:damage") {
-          msg = "Upgrade complete: High-Explosive (+20% Dmg)";
-        } else if (ev.kind === "upgrade:hp") {
-          msg = "Upgrade complete: Reinforced Armor (+15% HP)";
-        }
-        return this.addEntry(ev.tick, msg, "prod", "TECH");
+      let msg = "Upgrade research complete";
+      if (ev.kind === "upgrade:damage") {
+        msg = "Upgrade complete: High-Explosive (+15% Dmg)";
+      } else if (ev.kind === "upgrade:hp") {
+        msg = "Upgrade complete: Reinforced Armor (+15% HP)";
+      } else if (ev.kind === "upgrade:range") {
+        msg = "Upgrade complete: Extended Range (+20% Range)";
       }
-      return null;
+      return this.addEntry(ev.tick, msg, "prod", "TECH");
     }
 
-    // 5. Structure sold / decommissioned
+    // Structure sold / decommissioned
     if (ev.kind === "sold") {
-      if (isFriendly) {
-        const refund = ev.amount != null ? ` (+${ev.amount} ore)` : "";
-        return this.addEntry(ev.tick, `Structure sold${refund}`, "info", "SOLD");
-      }
-      return null;
+      const refund = ev.amount != null ? ` (+${ev.amount} ore)` : "";
+      return this.addEntry(ev.tick, `Structure sold${refund}`, "info", "SOLD");
     }
 
     return null;
@@ -191,7 +183,7 @@ export class IntelLogger {
       text = "ALERT: Base HQ under attack!";
       level = "danger";
       tag = "ALERT";
-    } else if (["Refinery", "Barracks", "Factory", "TechLab", "Turret"].includes(entity.kind)) {
+    } else if (["Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Radar", "TeslaCoil", "Turret"].includes(entity.kind)) {
       category = `building_${entity.kind}`;
       text = `ALERT: ${entity.kind} under fire!`;
       level = "danger";
@@ -225,7 +217,7 @@ export class IntelLogger {
       if (entity.kind === "Hq") {
         return this.addEntry(tick, "CRITICAL: Base HQ destroyed!", "danger", "LOST");
       }
-      if (["PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Turret"].includes(entity.kind)) {
+      if (["PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Radar", "TeslaCoil", "Turret"].includes(entity.kind)) {
         return this.addEntry(tick, `CRITICAL: ${entity.kind} destroyed!`, "danger", "LOST");
       }
       if (entity.kind === "Harvester") {
@@ -233,7 +225,7 @@ export class IntelLogger {
       }
       return this.addEntry(tick, `Unit lost: ${entity.kind}`, "danger", "LOST");
     } else {
-      if (["Hq", "PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Turret"].includes(entity.kind)) {
+      if (["Hq", "PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Radar", "TeslaCoil", "Turret"].includes(entity.kind)) {
         return this.addEntry(tick, `Enemy ${entity.kind} destroyed!`, "kill", "KILL");
       }
       return this.addEntry(tick, `Hostile neutralized: ${entity.kind}`, "kill", "KILL");

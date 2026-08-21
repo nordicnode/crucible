@@ -402,6 +402,42 @@ impl Bot for HardBot {
             }
         }
 
+        // 5b. Second-tier tech once the army is fielded and the bank allows
+        // it (a Tesla Coil guards the base, with a second PowerPlant paying
+        // its bill; mammoth tanks form the late-game siege core). The ore
+        // gates keep the tech spend from starving the massed army, and keep
+        // the hard benchmark exercising the full tech tree.
+        if own_building(g, p, BuildingType::TechLab).is_some() && g.tick > 900 {
+            // Second PowerPlant once the bank allows (pays the coil's bill).
+            if g.ore[p.index()] >= 300 {
+                if let Some(c) =
+                    place_if_missing(g, p, BuildingType::PowerPlant, base_offset(hq, 0, -4), 2)
+                {
+                    out.push(c);
+                }
+            }
+            // Tesla Coil guard once the bank can absorb a 250 ore spend.
+            if g.ore[p.index()] >= 350 {
+                if let Some(c) = place_if_missing(
+                    g,
+                    p,
+                    BuildingType::TeslaCoil,
+                    toward_enemy(hq, enemy_hq_tile(g, p), 3),
+                    1,
+                ) {
+                    out.push(c);
+                }
+            }
+        }
+        if own_building(g, p, BuildingType::TechLab).is_some()
+            && g.tick > 1_600
+            && g.ore[p.index()] >= 300
+        {
+            if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::MammothTank, 2) {
+                out.push(c);
+            }
+        }
+
         // 6. Mass late-game armor: 14 tanks + 4 artillery.
         if let Some(c) = train_up_to(g, p, BuildingType::Factory, UnitType::Tank, 14) {
             out.push(c);

@@ -12,11 +12,22 @@ use crucible_sim::GameConfig;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::store::{Store, StoredChampion};
+use crate::store::{EloPoint, Store, StoredChampion, StoredGenome, TrainingStat};
 use crate::AppState;
 
 fn err(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+/// Run a blocking store operation on the blocking pool so the async runtime
+/// never stalls behind the SQLite mutex (the trainer's generation checkpoint
+/// can hold it for a while).
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, (StatusCode, String)> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| err(format!("handler task failed: {e}")))
 }
 
 fn champion_payload(store: &Store, c: &StoredChampion) -> Value {
@@ -24,6 +35,23 @@ fn champion_payload(store: &Store, c: &StoredChampion) -> Value {
         .elo_history(c.genome_id)
         .ok()
         .and_then(|h| h.last().map(|p| p.elo));
+    // Reign length (seconds) once dethroned; the museum formats it.
+    let reign_secs = c.dethroned_at.map(|d| d - c.crowned_at);
+    // The champion's parent in the evolution lineage (if its genome is linked).
+    let parent_genome_id = store
+        .lineage_chain(c.genome_id)
+        .ok()
+        .and_then(|chain| chain.get(1).map(|p| p.id));
+    // Named gauntlet numbers instead of the raw [w,t,w,t] tuple.
+    let gauntlet = c.gauntlet_record.as_ref().and_then(|v| {
+        let parts = v.as_array()?;
+        Some(json!({
+            "champion_wins": parts.first()?.as_u64()?,
+            "champion_total": parts.get(1)?.as_u64()?,
+            "historical_wins": parts.get(2)?.as_u64()?,
+            "historical_total": parts.get(3)?.as_u64()?,
+        }))
+    });
     json!({
         "id": c.id,
         "genome_id": c.genome_id,
@@ -32,24 +60,47 @@ fn champion_payload(store: &Store, c: &StoredChampion) -> Value {
         "dethroned_at": c.dethroned_at,
         "reigning": c.reigning(),
         "gauntlet_record": c.gauntlet_record,
+        "gauntlet": gauntlet,
+        "era": c.era,
         "elo": elo,
+        "reign_secs": reign_secs,
+        "parent_genome_id": parent_genome_id,
     })
 }
 
-pub async fn champion(State(state): State<AppState>) -> impl IntoResponse {
-    let store = &state.store;
-    match store.get_reigning_champion() {
-        Ok(Some(c)) => {
-            let lineage = store.lineage_chain(c.genome_id).unwrap_or_default();
-            Json(json!({
-                "champion": champion_payload(store, &c),
-                "lineage": lineage,
-            }))
-            .into_response()
-        }
-        Ok(None) => Json(json!({ "champion": null })).into_response(),
-        Err(e) => err(e).into_response(),
-    }
+/// Query params for the museum archive: 0-based `page`, `page_size`
+/// (default 50, clamped 1..=200), and a whitelisted `sort` key.
+fn default_page_size() -> u32 {
+    50
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct MuseumQuery {
+    pub page: u32,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
+    pub sort: String,
+}
+
+pub async fn champion(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let res: Result<Json<Value>, rusqlite::Error> = blocking(move || {
+        Ok(match store.get_reigning_champion()? {
+            Some(c) => {
+                let lineage = store.lineage_chain(c.genome_id).unwrap_or_default();
+                Json(json!({
+                    "champion": champion_payload(&store, &c),
+                    "lineage": lineage,
+                }))
+            }
+            None => Json(json!({ "champion": null })),
+        })
+    })
+    .await?;
+    res.map_err(err)
 }
 
 #[derive(Deserialize)]
@@ -60,69 +111,107 @@ pub struct EloQuery {
 pub async fn elo_history(
     State(state): State<AppState>,
     Query(q): Query<EloQuery>,
-) -> impl IntoResponse {
-    let store = &state.store;
-    let genome_id = match q.genome_id.or_else(|| {
-        store
-            .get_reigning_champion()
-            .ok()
-            .flatten()
-            .map(|c| c.genome_id)
-    }) {
-        Some(id) => id,
-        None => return Json(json!({ "points": [] })).into_response(),
-    };
-    match store.elo_history(genome_id) {
-        Ok(points) => Json(json!({ "genome_id": genome_id, "points": points })).into_response(),
-        Err(e) => err(e).into_response(),
-    }
-}
-
-pub async fn lineage(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
-    match state.store.lineage_chain(id) {
-        Ok(chain) if chain.is_empty() => (StatusCode::NOT_FOUND, "no such genome").into_response(),
-        Ok(chain) => Json(json!({ "genome_id": id, "lineage": chain })).into_response(),
-        Err(e) => err(e).into_response(),
-    }
-}
-
-pub async fn museum(State(state): State<AppState>) -> impl IntoResponse {
-    let store = &state.store;
-    match store.list_champions() {
-        Ok(champions) => {
-            let list: Vec<Value> = champions
-                .iter()
-                .map(|c| champion_payload(store, c))
-                .collect();
-            Json(json!({ "champions": list })).into_response()
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let genome_id = q.genome_id;
+    let res: Result<Option<(i64, Vec<EloPoint>)>, rusqlite::Error> = blocking(move || {
+        let genome_id = match genome_id.or_else(|| {
+            store
+                .get_reigning_champion()
+                .ok()
+                .flatten()
+                .map(|c| c.genome_id)
+        }) {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+        Ok(Some((genome_id, store.elo_history(genome_id)?)))
+    })
+    .await?;
+    match res {
+        Ok(Some((genome_id, points))) => {
+            Ok(Json(json!({ "genome_id": genome_id, "points": points })))
         }
-        Err(e) => err(e).into_response(),
+        Ok(None) => Ok(Json(json!({ "points": [] }))),
+        Err(e) => Err(err(e)),
     }
 }
 
-pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
-    let store = &state.store;
-    let count = |t: &str| store.count_rows(t).unwrap_or(0);
-    Json(json!({
-        "ok": true,
-        "uptime_secs": state.started_at.elapsed().as_secs(),
-        "counts": {
-            "matches": count("matches"),
-            "genomes": count("genomes"),
-            "champions": count("champions"),
-            "events": count("events"),
-        },
-        "recent_events": store.recent_events(50).unwrap_or_default(),
-        "trainer": state.trainer.snapshot(),
-    }))
-    .into_response()
+pub async fn lineage(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let res: Result<Vec<StoredGenome>, rusqlite::Error> =
+        blocking(move || store.lineage_chain(id)).await?;
+    match res {
+        Ok(chain) if chain.is_empty() => Err((StatusCode::NOT_FOUND, "no such genome".into())),
+        Ok(chain) => Ok(Json(json!({ "genome_id": id, "lineage": chain }))),
+        Err(e) => Err(err(e)),
+    }
 }
 
-pub async fn training_stats(State(state): State<AppState>) -> impl IntoResponse {
-    match state.store.list_training_stats(10_000) {
-        Ok(stats) => Json(json!({ "stats": stats })).into_response(),
-        Err(e) => err(e).into_response(),
-    }
+pub async fn museum(
+    State(state): State<AppState>,
+    Query(q): Query<MuseumQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let res: Result<Json<Value>, rusqlite::Error> = blocking(move || {
+        let total = store.count_champions()? as u32;
+        let page_size = q.page_size.clamp(1, 200).max(1);
+        let max_page = total.saturating_sub(1) / page_size;
+        let page = q.page.min(max_page);
+        let offset = page * page_size;
+        let champions = store.list_champions_paged(&q.sort, page_size, offset)?;
+        let list: Vec<Value> = champions
+            .iter()
+            .map(|c| champion_payload(&store, c))
+            .collect();
+        Ok(Json(json!({
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "sort": q.sort,
+            "champions": list,
+        })))
+    })
+    .await?;
+    res.map_err(err)
+}
+
+pub async fn status(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let trainer = state.trainer.clone();
+    let started = state.started_at;
+    let res: Result<Json<Value>, rusqlite::Error> = blocking(move || {
+        let count = |t: &str| store.count_rows(t).unwrap_or(0);
+        Ok(Json(json!({
+            "ok": true,
+            "uptime_secs": started.elapsed().as_secs(),
+            "counts": {
+                "matches": count("matches"),
+                "genomes": count("genomes"),
+                "champions": count("champions"),
+                "events": count("events"),
+            },
+            "recent_events": store.recent_events(50).unwrap_or_default(),
+            "trainer": trainer.snapshot(),
+        })))
+    })
+    .await?;
+    res.map_err(err)
+}
+
+pub async fn training_stats(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let res: Result<Vec<TrainingStat>, rusqlite::Error> =
+        blocking(move || store.list_training_stats(10_000)).await?;
+    res.map(|stats| Json(json!({ "stats": stats })))
+        .map_err(err)
 }
 
 /// On-demand change report between two stored genomes (dev/diagnostic; the
@@ -221,7 +310,7 @@ pub async fn autobattle(
                 seed,
                 &format!("genome:{a}"),
                 &format!("genome:{b}"),
-                &format!("{:?}", outcome.outcome.winner),
+                &crate::store::result_label(outcome.outcome.winner),
                 outcome.outcome.duration_ticks,
                 &replay_json,
             )
@@ -256,14 +345,15 @@ mod tests {
         let b = store
             .save_genome(1, Some(a), "mutant", &[0.3, 0.4])
             .unwrap();
-        store.crown_champion(a, 0, None).unwrap();
-        store.crown_champion(b, 1, None).unwrap();
+        store.crown_champion(a, 0, None, None).unwrap();
+        store.crown_champion(b, 1, None, None).unwrap();
         store.record_elo(a, 1500.0).unwrap();
         store.record_elo(b, 1550.0).unwrap();
         AppState {
             store,
             trainer: Arc::new(crate::trainer::TrainerShared::default()),
             diagnostics: Arc::new(tokio::sync::Semaphore::new(1)),
+            live_matches: Arc::new(tokio::sync::Semaphore::new(8)),
             started_at: std::time::Instant::now(),
         }
     }
@@ -304,6 +394,51 @@ mod tests {
         assert_eq!(champions[0]["reigning"], false);
         assert_eq!(champions[1]["reigning"], true);
         assert!(champions[1]["elo"].as_f64().unwrap() > 0.0);
+        // The enriched archive fields ride along.
+        assert_eq!(json["total"].as_u64().unwrap(), 2);
+        assert!(champions[1]["reign_secs"].is_null());
+        assert_eq!(
+            champions[1]["parent_genome_id"].as_i64().unwrap(),
+            champions[0]["genome_id"].as_i64().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn museum_paginates_and_sorts() {
+        let app = router(seeded_state());
+        let get = |uri: &str| {
+            app.clone().oneshot(
+                axum::http::Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+        };
+
+        // One champion per page: page 0 = oldest, page 1 = newest.
+        let p0 = body_json(get("/api/museum?page=0&page_size=1").await.unwrap()).await;
+        assert_eq!(p0["total"].as_u64().unwrap(), 2);
+        assert_eq!(p0["page"].as_u64().unwrap(), 0);
+        assert_eq!(p0["champions"].as_array().unwrap().len(), 1);
+        assert_eq!(p0["champions"][0]["reigning"], false);
+        assert!(p0["champions"][0]["gauntlet"].is_null());
+
+        let p1 = body_json(get("/api/museum?page=1&page_size=1").await.unwrap()).await;
+        assert_eq!(p1["champions"][0]["reigning"], true);
+
+        // Newest-first sort flips the order.
+        let desc = body_json(
+            get("/api/museum?sort=crowned_desc&page_size=1")
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(desc["champions"][0]["reigning"], true);
+        assert_eq!(desc["sort"], "crowned_desc");
+
+        // An out-of-range page clamps to the last page instead of erroring.
+        let last = body_json(get("/api/museum?page=99&page_size=1").await.unwrap()).await;
+        assert_eq!(last["page"].as_u64().unwrap(), 1);
     }
 
     #[tokio::test]
@@ -366,6 +501,7 @@ mod tests {
             store,
             trainer: Arc::new(crate::trainer::TrainerShared::default()),
             diagnostics: Arc::new(tokio::sync::Semaphore::new(1)),
+            live_matches: Arc::new(tokio::sync::Semaphore::new(8)),
             started_at: std::time::Instant::now(),
         };
 

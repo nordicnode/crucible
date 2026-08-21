@@ -573,6 +573,7 @@
       .hidden { display: none !important; }
       .win { color: var(--green); text-shadow: 0 0 10px rgba(34, 197, 94, 0.5); }
       .lose { color: var(--red); text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+      .draw { color: var(--amber); text-shadow: 0 0 10px rgba(234, 179, 8, 0.5); }
       .panel.wide { max-width: 800px; text-align: left; overflow-y: auto; max-height: 86vh; }
       .panel.wide h2 { font-size: 1.1rem; margin: 16px 0 6px; color: var(--amber); }
       .muted { color: #94a3b8; font-size: 11px; }
@@ -691,6 +692,7 @@
         </div>
 
         <p style="color:#cbd5e1; margin-bottom: 16px; font-size:12px; font-weight:700;">SELECT OPPONENT TO ENGAGE:</p>
+        <p id="lobby-status" class="muted" style="min-height:1.2em; margin-top:-8px;"></p>
         <div class="row">
           <button class="btn" data-opp="easy">Easy (Turtle)</button>
           <button class="btn" data-opp="medium">Medium (Waves)</button>
@@ -702,6 +704,7 @@
         <div class="row" id="museum-opps"></div>
         <div class="row" style="margin-top:20px; border-top:1.5px solid #334155; padding-top:14px;">
           <button class="btn" id="open-dashboard">Dashboard &amp; Lineage</button>
+          <button class="btn" id="open-museum">Museum Archive</button>
           <button class="btn" id="open-spectate">Replay Archives</button>
         </div>
       </div>
@@ -709,6 +712,7 @@
       <div class="panel hidden" id="result">
         <h1 id="result-title"></h1>
         <p id="result-detail" style="color:#cbd5e1; font-size:13px; margin: 12px 0 20px;"></p>
+        <p id="result-ghost" style="color:#fbbf24; font-size:12px; margin: -12px 0 20px;"></p>
         <div class="row"><button class="btn" id="again">Return to Briefing</button></div>
       </div>
 
@@ -724,6 +728,26 @@
         <div id="dash-museum"></div>
         <div id="dash-events"></div>
         <div class="row"><button class="btn" id="dash-back">Return to Briefing</button></div>
+      </div>
+
+      <div class="panel wide hidden" id="museum">
+        <div class="logo-box" style="margin-bottom:12px; padding-bottom:8px;">
+          <h1 class="logo-title" style="font-size:1.5rem;">MUSEUM ARCHIVE</h1>
+          <div class="logo-sub">Every champion that ever held the throne</div>
+        </div>
+        <div class="row" style="gap:12px; align-items:center; margin-bottom:10px;">
+          <label class="muted" style="font-size:11px; font-weight:700;">SORT</label>
+          <select id="museum-sort" style="background:#0b1017; color:#e2e8f0; border:1px solid #334155; padding:4px 8px;"></select>
+          <span id="museum-total" class="muted" style="font-size:11px;"></span>
+          <span id="museum-status" class="muted" style="font-size:11px; margin-left:auto;"></span>
+        </div>
+        <div id="museum-body"></div>
+        <div class="row" style="margin-top:14px;">
+          <button class="btn" id="museum-prev">◀ Prev</button>
+          <span id="museum-pages" class="muted" style="font-size:11px; margin:0 12px;"></span>
+          <button class="btn" id="museum-next">Next ▶</button>
+        </div>
+        <div class="row"><button class="btn" id="museum-back">Return to Briefing</button></div>
       </div>
 
       <div class="panel wide hidden" id="spectate-list">

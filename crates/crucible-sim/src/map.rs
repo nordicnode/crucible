@@ -10,7 +10,6 @@ use std::collections::BinaryHeap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::fixed::{Pos, FIX_SCALE};
 use crate::rng::Rng;
 
 pub const MAP_SIZE: usize = 64;
@@ -79,21 +78,22 @@ impl Map {
 
     /// Deterministic A* over the passable grid (8-dir, no corner cutting).
     /// `blocked` is a dynamic overlay (buildings): a tile is traversable iff
-    /// it is passable terrain and not marked blocked. Pass an all-false grid
-    /// for terrain-only routing.
+    /// it is passable terrain and not marked blocked. `fly` (aircraft) skips
+    /// the overlay entirely — they fly over buildings — while still routing
+    /// around impassable terrain.
     pub fn find_path(
         &self,
         from: (u8, u8),
         to: (u8, u8),
         blocked: &[bool],
+        fly: bool,
     ) -> Option<Vec<(u8, u8)>> {
         if from == to {
             return Some(vec![]);
         }
         if !self.is_passable(from.0, from.1)
             || !self.is_passable(to.0, to.1)
-            || blocked[tile_index(from.0, from.1)]
-            || blocked[tile_index(to.0, to.1)]
+            || (!fly && (blocked[tile_index(from.0, from.1)] || blocked[tile_index(to.0, to.1)]))
         {
             return None;
         }
@@ -147,7 +147,7 @@ impl Map {
 
             for (nx, ny, step) in self.neighbors(cx, cy) {
                 let nidx = tile_index(nx, ny);
-                if blocked[nidx] {
+                if !fly && blocked[nidx] {
                     continue;
                 }
                 let tentative = g_score[cur] + step;
@@ -257,6 +257,18 @@ fn try_generate(seed: u64) -> Option<Map> {
         }
     }
 
+    // A few small mid-field rocks add cover for skirmishes without blocking
+    // the approach lanes (the connectivity retry below guarantees a path).
+    let cover_blobs = rng.below(3) as usize; // 0..=2
+    for _ in 0..cover_blobs {
+        let cx = rng.range(20, 44) as u8;
+        let cy = rng.range(20, 44) as u8;
+        let radius = 1 + rng.below(2) as i32; // 1..=2
+        for (x, y) in [(cx, cy), (mirror(cx), mirror(cy))] {
+            stamp_blob(&mut passable, x, y, radius);
+        }
+    }
+
     // Clear construction perimeter around each HQ (radius 4 tiles).
     for (x, y) in [hq0, hq1] {
         clear_around(&mut passable, x, y, 4);
@@ -267,7 +279,8 @@ fn try_generate(seed: u64) -> Option<Map> {
     let base_oy = if hy < 32 { hy + 5 } else { hy - 5 };
     stamp_ore_cluster_amount(&mut ore, &mut passable, base_ox, base_oy, 1200);
 
-    // Expansion sites: generate N strategic pairs across the battlefield
+    // Expansion sites: generate N strategic pairs across the battlefield,
+    // with slightly varied field sizes so maps don't all feel identical.
     let sites = 2 + rng.below(3) as usize; // 2..=4
     let mut placed = 0;
     let mut guard = 0;
@@ -278,7 +291,8 @@ fn try_generate(seed: u64) -> Option<Map> {
         if !valid_site_center(&passable, sx, sy, hq0, hq1) {
             continue;
         }
-        stamp_ore_cluster_amount(&mut ore, &mut passable, sx, sy, 1500);
+        let amount = 1500 + 100 * rng.below(5) as i32; // 1500..=1900 per tile
+        stamp_ore_cluster_amount(&mut ore, &mut passable, sx, sy, amount);
         placed += 1;
     }
 
@@ -349,16 +363,22 @@ fn clear_around(passable: &mut [bool], cx: u8, cy: u8, radius: i32) {
 }
 
 /// Stamp a small ore cluster at `(cx, cy)` *and* its point-mirror image, so
-/// the map stays exactly symmetric.
+/// the map stays exactly symmetric. The center tile is ~1.38x the nominal
+/// amount and the five ring tiles ~0.92x, so the *total* ore in a field stays
+/// the same as a flat cluster while rich/poor tiles make fields feel organic
+/// (harvesters gravitate to the rich core).
 fn stamp_ore_cluster_amount(ore: &mut [i32], passable: &mut [bool], cx: u8, cy: u8, amount: i32) {
+    let center = amount * 18 / 13;
+    let ring = amount * 12 / 13;
     for (dx, dy) in &[(0i32, 0i32), (1, 0), (0, 1), (1, 1), (-1, 1), (0, -1)] {
+        let amt = if *dx == 0 && *dy == 0 { center } else { ring };
         let (x, y) = (cx as i32 + dx, cy as i32 + dy);
         if in_bounds(x, y) {
             let (x, y) = (x as u8, y as u8);
-            ore[tile_index(x, y)] = amount;
+            ore[tile_index(x, y)] = amt;
             passable[tile_index(x, y)] = true;
             let (mx, my) = (mirror(x), mirror(y));
-            ore[tile_index(mx, my)] = amount;
+            ore[tile_index(mx, my)] = amt;
             passable[tile_index(mx, my)] = true;
         }
     }
@@ -418,16 +438,6 @@ pub fn open_test_map(seed: u64) -> Map {
     open_map(seed)
 }
 
-/// Fix-unit position helpers for tile centers (used by spawn logic).
-#[allow(dead_code)]
-pub fn hq_pos(map: &Map, player: crate::entity::Player) -> Pos {
-    let t = map.hq_tiles[player.index()];
-    Pos::new(
-        t.0 as i32 * FIX_SCALE + FIX_SCALE / 2,
-        t.1 as i32 * FIX_SCALE + FIX_SCALE / 2,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,7 +466,7 @@ mod tests {
     fn path_between_hqs_exists() {
         for seed in 0..200u64 {
             let map = Map::generate(seed);
-            let p = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked());
+            let p = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked(), false);
             assert!(p.is_some(), "no path between HQs for seed {seed}");
         }
     }
@@ -468,8 +478,8 @@ mod tests {
     #[test]
     fn pathfinding_is_deterministic() {
         let map = Map::generate(12345);
-        let a = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked());
-        let b = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked());
+        let a = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked(), false);
+        let b = map.find_path(map.hq_tiles[0], map.hq_tiles[1], &empty_blocked(), false);
         assert_eq!(a, b);
         // A* on a connected map never returns a path that re-enters start.
         let path = a.unwrap();

@@ -12,12 +12,17 @@ pub const HIDDEN1: usize = 48;
 pub const HIDDEN2: usize = 48;
 
 /// Output head layout (see `decision.rs`).
-pub const BUILD_OUT: usize = 5;
-pub const TRAIN_OUT: usize = 4;
-pub const ARMY_ACTION_OUT: usize = 3;
+pub const BUILD_OUT: usize = 8;
+pub const TRAIN_OUT: usize = 7;
+/// Army-wide actions: attack-move, defend, scout, and focus-fire (snipe).
+pub const ARMY_ACTION_OUT: usize = 4;
 pub const SECTOR_OUT: usize = 64;
-pub const TECH_OUT: usize = 3;
-pub const OUTPUT: usize = BUILD_OUT + TRAIN_OUT + ARMY_ACTION_OUT + SECTOR_OUT + TECH_OUT;
+pub const TECH_OUT: usize = 4;
+/// Snipe target-type head (used only when the army action is `Snipe`):
+/// enemy harvester, refinery, HQ, or factory.
+pub const SNIPE_OUT: usize = 4;
+pub const OUTPUT: usize =
+    BUILD_OUT + TRAIN_OUT + ARMY_ACTION_OUT + SECTOR_OUT + TECH_OUT + SNIPE_OUT;
 
 pub const W1: usize = FEATURE_DIM * HIDDEN1;
 pub const B1: usize = HIDDEN1;
@@ -119,8 +124,11 @@ mod tests {
 
     #[test]
     fn genome_len_matches_layer_sizes() {
-        assert_eq!(GENOME_LEN, 11_263);
-        assert_eq!(OUTPUT, 79);
+        // FEATURE_DIM is 224 with the plan §5.2 history embedding (2 stacked
+        // command ticks): W1 = 224*48, W3 = 48*91 (the snipe head added 4
+        // target-type outputs and a 4th army action).
+        assert_eq!(GENOME_LEN, 17_611);
+        assert_eq!(OUTPUT, 91);
     }
 
     #[test]

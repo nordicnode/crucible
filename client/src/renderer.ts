@@ -12,7 +12,7 @@ import {
   drawSelectionReticle,
   drawUnitSprite,
 } from "./sprites";
-import { BUILDING_KINDS, BUILD_COSTS } from "./types";
+import { BUILDING_KINDS, BUILD_COSTS, UNIT_KINDS } from "./types";
 import type { Entity } from "./world";
 import { World } from "./world";
 
@@ -198,11 +198,11 @@ export class Renderer {
       this.drawWaypoints(ctx, world, selection, opts.waypoints);
     }
 
-    // 6. Entities: Buildings first, then units
+    // 6. Entities: Buildings first, then ground units, then air units
     const drawList = [...world.entities.values()].sort((a, b) => {
-      const aUnit = isUnit(a);
-      const bUnit = isUnit(b);
-      if (aUnit !== bUnit) return aUnit ? 1 : -1;
+      const aTier = isAirUnit(a) ? 2 : isUnit(a) ? 1 : 0;
+      const bTier = isAirUnit(b) ? 2 : isUnit(b) ? 1 : 0;
+      if (aTier !== bTier) return aTier - bTier;
       return a.id - b.id;
     });
 
@@ -558,6 +558,23 @@ export function drawRadar(
     ctx.fillRect(ox + p.x * s - dotSize / 2, oy + p.y * s - dotSize / 2, dotSize, dotSize);
   }
 
+  // 3b. 8×8 sector grid (the same sectors the AI's army head targets, plan
+  // §8: "Minimap with sector grid") — lets players read AI target choices.
+  ctx.strokeStyle = "rgba(56, 189, 248, 0.22)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 8; i++) {
+    const gx = ox + i * (MAP / 8) * s;
+    const gy = oy + i * (MAP / 8) * s;
+    ctx.beginPath();
+    ctx.moveTo(gx, oy);
+    ctx.lineTo(gx, oy + MAP * s);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ox, gy);
+    ctx.lineTo(ox + MAP * s, gy);
+    ctx.stroke();
+  }
+
   // 4. Accurate Camera Viewport Box
   const vr = cameraViewRect(camera, window.innerWidth, window.innerHeight);
   if (vr) {
@@ -592,8 +609,12 @@ export function drawRadar(
   ctx.stroke();
 }
 
-function isUnit(e: Entity): boolean {
-  return ["Harvester", "Infantry", "Tank", "Artillery"].includes(e.kind);
+export function isUnit(e: Entity): boolean {
+  return UNIT_KINDS.has(e.kind);
+}
+
+export function isAirUnit(e: Entity): boolean {
+  return e.kind === "Gunship" || e.kind === "Interceptor";
 }
 
 export function isBuildingPlacable(
@@ -635,10 +656,15 @@ export function isBuildingPlacable(
     return false;
   }
 
-  // TechLab and Airfield require a Factory
+  // Tech tree gates: TechLab & Airfield need a Factory; Radar & TeslaCoil
+  // are the second tier and need the TechLab itself.
   if (btype === "TechLab" || btype === "Airfield") {
     const hasFactory = world.ownBuildings.some((b) => b.kind === "Factory");
     if (!hasFactory) return false;
+  }
+  if (btype === "Radar" || btype === "TeslaCoil") {
+    const hasLab = world.ownBuildings.some((b) => b.kind === "TechLab");
+    if (!hasLab) return false;
   }
 
   // Check if player has enough ore

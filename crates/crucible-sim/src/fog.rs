@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::entity::{BuildingType, EntityId, Player, UnitType};
 use crate::fixed::{dist2, Fix, Pos, FIX_SCALE};
 use crate::game::Game;
-use crate::map::{tile_coords, tile_index, MAP_TILES};
+use crate::map::{tile_index, MAP_TILES};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct RememberedUnit {
@@ -34,6 +34,11 @@ pub struct FogMemory {
     pub buildings: Vec<RememberedBuilding>,
     /// Ore tiles this player has ever seen (fields don't move, but must be scouted).
     pub known_ore: Vec<bool>,
+    /// Every tile this player has ever seen (monotonic; powers the AI's
+    /// "unexplored fraction" observation). `#[serde(default)]` keeps old
+    /// persisted states loadable — a missing field starts fully unexplored.
+    #[serde(default)]
+    pub explored: Vec<bool>,
 }
 
 impl Default for FogMemory {
@@ -42,6 +47,7 @@ impl Default for FogMemory {
             units: Vec::new(),
             buildings: Vec::new(),
             known_ore: vec![false; MAP_TILES],
+            explored: vec![false; MAP_TILES],
         }
     }
 }
@@ -57,6 +63,8 @@ pub struct FogView {
     /// Enemy buildings, merged with current positions where visible.
     pub buildings: Vec<RememberedBuilding>,
     pub known_ore: Vec<bool>,
+    /// Every tile this player has ever seen.
+    pub explored: Vec<bool>,
 }
 
 impl Game {
@@ -115,6 +123,7 @@ impl Game {
             units,
             buildings,
             known_ore: mem.known_ore.clone(),
+            explored: mem.explored.clone(),
         }
     }
 
@@ -194,6 +203,14 @@ impl Game {
                 self.fog[player.index()].known_ore[idx] = true;
             }
         }
+
+        // Explored: every tile ever seen (monotonic union).
+        let explored = &mut self.fog[player.index()].explored;
+        for (idx, &seen) in visible.iter().enumerate() {
+            if seen {
+                explored[idx] = true;
+            }
+        }
     }
 }
 
@@ -211,11 +228,6 @@ fn mark_visible(visible: &mut [bool], pos: Pos, vision: Fix) {
             }
         }
     }
-}
-
-#[allow(dead_code)]
-fn _tile_helpers() -> ((u8, u8), usize) {
-    (tile_coords(0), 0)
 }
 
 #[cfg(test)]

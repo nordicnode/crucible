@@ -9,6 +9,16 @@ fn main() {
         tile: (15, 11),
     };
     println!("{}", serde_json::to_string(&cmd).unwrap());
+    // Focus-fire command (pinned by client/src/types.test.ts).
+    println!(
+        "{}",
+        serde_json::to_string(&Command::Attack {
+            player: Player::P0,
+            units: vec![7, 8],
+            target: 42,
+        })
+        .unwrap()
+    );
     // And the ClientMsg-shaped wrapper the server's ws.rs parses.
     println!(
         "{}",

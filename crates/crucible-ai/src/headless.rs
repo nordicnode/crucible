@@ -62,7 +62,13 @@ pub fn run_match_with_replay(
     let mut replay = Replay::new(seed, config.clone());
 
     // Safety valve in case a bot configuration deadlocks the match forever.
-    let max_ticks = config.timeout_ticks + 1_000;
+    // For an unlimited config (`timeout_ticks <= 0`) this must not silently
+    // truncate a match at ~100 s, so only the huge deadlock guard applies.
+    let max_ticks = if config.timeout_ticks > 0 {
+        config.timeout_ticks + 1_000
+    } else {
+        1_000_000
+    };
 
     while !game.is_over() && game.tick < max_ticks {
         if game.is_command_tick() {

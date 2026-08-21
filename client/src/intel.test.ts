@@ -63,12 +63,15 @@ describe("IntelLogger", () => {
     expect(entry?.tag).toBe("UNIT");
   });
 
-  it("ignores enemy unit training in fog", () => {
+  it("logs training completions for any event the server sends", () => {
+    // The server only ever sends P0 events, so processDiffEvent treats every
+    // incoming event as friendly; enemy activity arrives via fog instead.
     const logger = new IntelLogger();
-    const ev: DiffEvent = { tick: 200, kind: "trained:tank", player: 1 };
+    const ev: DiffEvent = { tick: 200, kind: "trained:tank" };
     const entry = logger.processDiffEvent(ev);
-    expect(entry).toBeNull();
-    expect(logger.entries.length).toBe(0);
+    expect(entry).not.toBeNull();
+    expect(entry?.text).toBe("Tank roll out");
+    expect(entry?.tag).toBe("UNIT");
   });
 
   it("logs upgrade completions", () => {
@@ -116,6 +119,26 @@ describe("IntelLogger", () => {
     expect(entry?.text).toBe("ALERT: Base HQ under attack!");
     expect(entry?.level).toBe("danger");
     expect(entry?.tag).toBe("ALERT");
+  });
+
+  it("alerts for airfields under attack", () => {
+    const logger = new IntelLogger();
+    const airfield: DiffEntity = { id: 7, kind: "Airfield", owner: 0, x: 20, y: 20, hp: 180, maxHp: 250 };
+    const entry = logger.processUnderAttack(60, airfield);
+    expect(entry?.text).toBe("ALERT: Airfield under fire!");
+    expect(entry?.level).toBe("danger");
+    expect(entry?.tag).toBe("ALERT");
+  });
+
+  it("logs airfield destruction as critical friendly loss and enemy kill", () => {
+    const logger = new IntelLogger();
+    const friendly = logger.processEntityDestroyed(70, { id: 7, kind: "Airfield", owner: 0 });
+    expect(friendly.text).toBe("CRITICAL: Airfield destroyed!");
+    expect(friendly.level).toBe("danger");
+
+    const enemy = logger.processEntityDestroyed(80, { id: 27, kind: "Airfield", owner: 1 });
+    expect(enemy.text).toBe("Enemy Airfield destroyed!");
+    expect(enemy.level).toBe("kill");
   });
 
   it("logs friendly casualties and hostile neutralizations", () => {

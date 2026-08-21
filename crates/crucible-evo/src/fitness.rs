@@ -147,13 +147,24 @@ pub fn evaluate_production(genome: &[f32], seeds: &[u64], config: &GameConfig, t
     total / seeds.len() as f32
 }
 
-/// Mean shaped fitness of `genome` against a set of sampled opponents (from
-/// the population) plus the reigning champion. Each opponent is played on
-/// every seed, both spawn sides. Used by the self-play trainer.
+/// Map a match outcome to a league result from `player`'s perspective.
+pub fn outcome_for(d: &DetailedOutcome, player: Player) -> crate::league::Outcome {
+    if d.outcome.won_by(player) {
+        crate::league::Outcome::Win
+    } else if d.outcome.winner.is_none() {
+        crate::league::Outcome::Draw
+    } else {
+        crate::league::Outcome::Loss
+    }
+}
+
+/// Mean shaped fitness of `genome` against a set of sampled opponents from
+/// the population, each played on every seed, both spawn sides. Used by the
+/// self-play trainer. (The reigning champion is evaluated separately via
+/// [`head_to_head`] so its per-match outcomes can feed the Elo league too.)
 pub fn self_play_fitness(
     genome: &[f32],
     opponents: &[Vec<f32>],
-    champion: Option<&[f32]>,
     seeds: &[u64],
     config: &GameConfig,
 ) -> f32 {
@@ -165,13 +176,34 @@ pub fn self_play_fitness(
         });
         n += 1;
     }
-    if let Some(c) = champion {
-        total += evaluate_vs(genome, seeds, config, || -> Box<dyn Bot> {
-            Box::new(GenomeBot::new(c.to_vec()))
-        });
-        n += 1;
-    }
     total / n.max(1) as f32
+}
+
+/// Play `genome` against `opponent` (a genome) on both spawn sides over
+/// `seeds`. Returns the mean shaped fitness plus every individual match
+/// outcome from `genome`'s perspective (for the Elo league).
+pub fn head_to_head(
+    genome: &[f32],
+    opponent: &[f32],
+    seeds: &[u64],
+    config: &GameConfig,
+) -> (f32, Vec<crate::league::Outcome>) {
+    let mut total = 0.0f32;
+    let mut outcomes = Vec::with_capacity(seeds.len() * 2);
+    for &seed in seeds {
+        let mut g0 = GenomeBot::new(genome.to_vec());
+        let mut o0 = Box::new(GenomeBot::new(opponent.to_vec()));
+        let d0 = run_match_detailed(seed, config, &mut g0, o0.as_mut());
+        total += shaped_fitness(&d0, Player::P0);
+        outcomes.push(outcome_for(&d0, Player::P0));
+
+        let mut g1 = GenomeBot::new(genome.to_vec());
+        let mut o1 = Box::new(GenomeBot::new(opponent.to_vec()));
+        let d1 = run_match_detailed(seed, config, o1.as_mut(), &mut g1);
+        total += shaped_fitness(&d1, Player::P1);
+        outcomes.push(outcome_for(&d1, Player::P1));
+    }
+    (total / (seeds.len().max(1) * 2) as f32, outcomes)
 }
 
 /// Total ore a player has spent (units + buildings), for income accounting.

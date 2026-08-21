@@ -83,6 +83,9 @@ pub struct CurriculumConfig {
     pub match_timeout_ticks: i32,
     /// Tick cap for the solo shaping stages (economy + production).
     pub shaping_ticks: i32,
+    /// Worker threads for stage evaluation. `0` = auto (all available cores).
+    /// Evaluation is pure per genome, so results are bit-identical to serial.
+    pub eval_threads: usize,
     pub master_seed: u64,
 }
 
@@ -94,6 +97,7 @@ impl Default for CurriculumConfig {
             seeds_per_generation: 2,
             match_timeout_ticks: 3 * 60 * 10,
             shaping_ticks: 600,
+            eval_threads: 0,
             master_seed: 0xB007_57A6,
         }
     }
@@ -227,7 +231,42 @@ impl Curriculum {
         if self.stage == Stage::Done {
             return (0.0, 0.0);
         }
-        let fitnesses: Vec<f32> = self.pop.genomes.iter().map(|g| self.evaluate(g)).collect();
+        // Evaluate every genome in parallel: each genome's matches are pure
+        // and deterministic (per-genome seeded RNG, fresh match state), so the
+        // fitness vector is bit-identical to serial evaluation.
+        let n = self.pop.genomes.len();
+        let nthreads = self.cfg.eval_threads.max(1).min(n).min(
+            std::thread::available_parallelism()
+                .map(|x| x.get())
+                .unwrap_or(1),
+        );
+        let mut fitnesses = vec![0.0f32; n];
+        let (base, extra) = (n / nthreads, n % nthreads);
+        std::thread::scope(|s| {
+            let mut slots: Vec<&mut [f32]> = Vec::with_capacity(nthreads);
+            let mut rest = &mut fitnesses[..];
+            for t in 0..nthreads {
+                let len = base + usize::from(t < extra);
+                let (head, tail) = rest.split_at_mut(len);
+                slots.push(head);
+                rest = tail;
+            }
+            let cur = &*self;
+            let mut start = 0usize;
+            let mut workers = Vec::with_capacity(nthreads);
+            for slot in slots {
+                let len = slot.len();
+                workers.push(s.spawn(move || {
+                    for (k, s) in slot.iter_mut().enumerate() {
+                        *s = cur.evaluate(&cur.pop.genomes[start + k]);
+                    }
+                }));
+                start += len;
+            }
+            for w in workers {
+                w.join().expect("curriculum evaluation task panicked");
+            }
+        });
         let (mean, best) = Population::fitness_stats(&fitnesses);
         let mut rng = Rng::from_seed(
             mix(self.cfg.master_seed, self.stage, self.pop.generation)

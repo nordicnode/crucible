@@ -20,29 +20,51 @@ pub fn map_hq_json(seed: u64) -> String {
     serde_json::to_string(&map.hq_tiles).expect("infallible")
 }
 
+/// Build a JS-side error value. On wasm this is a real string; native test
+/// builds have no JS runtime to allocate one, so they fall back to `undefined`
+/// (the Ok path is what the native tests exercise).
+fn js_err(msg: String) -> JsValue {
+    #[cfg(target_arch = "wasm32")]
+    {
+        JsValue::from_str(&msg)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = msg;
+        JsValue::UNDEFINED
+    }
+}
+
+/// Parse a replay from browser-supplied JSON. Malformed or legacy-format
+/// replays return an `Err` instead of panicking — a panic in wasm is fatal to
+/// the whole page, and spectate should degrade to a visible error instead.
+fn parse_replay(replay_json: &str) -> Result<Replay, JsValue> {
+    serde_json::from_str(replay_json).map_err(|e| js_err(format!("invalid replay JSON: {e}")))
+}
+
 /// Re-run a replay to a given tick and return the game snapshot as JSON.
 /// Deterministic: identical input produces byte-identical output on native
 /// and wasm. Supports seeking to any tick (forward or backward).
 #[wasm_bindgen]
-pub fn replay_snapshot_json(replay_json: &str, tick: i32) -> String {
-    let replay: Replay = serde_json::from_str(replay_json).expect("valid replay");
+pub fn replay_snapshot_json(replay_json: &str, tick: i32) -> Result<String, JsValue> {
+    let replay = parse_replay(replay_json)?;
     let game = serialize::replay_at_tick(&replay, tick);
-    serialize::snapshot_json(&game)
+    Ok(serialize::snapshot_json(&game))
 }
 
 /// Static replay metadata for the spectate screen: the map (passability, HQ
 /// spawns, initial ore layout) plus the recorded outcome. Called once per
 /// replay; the per-frame payload in [`replay_frame`] stays lean.
 #[wasm_bindgen]
-pub fn replay_meta(replay_json: &str) -> String {
-    let replay: Replay = serde_json::from_str(replay_json).expect("valid replay");
+pub fn replay_meta(replay_json: &str) -> Result<String, JsValue> {
+    let replay = parse_replay(replay_json)?;
     let map = Map::generate(replay.map_seed);
     let duration = replay
         .result
         .as_ref()
         .map(|r| r.duration_ticks)
         .unwrap_or(replay.config.timeout_ticks);
-    serde_json::json!({
+    Ok(serde_json::json!({
         "map_seed": replay.map_seed,
         "passable": map.passable,
         "hq_tiles": map.hq_tiles,
@@ -51,15 +73,15 @@ pub fn replay_meta(replay_json: &str) -> String {
         "winner": replay.result.as_ref().and_then(|r| r.winner.map(|p| p.index() as u8)),
         "win_reason": replay.result.as_ref().and_then(|r| r.reason),
     })
-    .to_string()
+    .to_string())
 }
 
 /// One lean spectate frame: both players' entities (full state, no fog) and
 /// scores at a given tick. `kind` strings use the serde variant names
 /// (`"Infantry"`, `"Hq"`, …) to match the live match protocol.
 #[wasm_bindgen]
-pub fn replay_frame(replay_json: &str, tick: i32) -> String {
-    let replay: Replay = serde_json::from_str(replay_json).expect("valid replay");
+pub fn replay_frame(replay_json: &str, tick: i32) -> Result<String, JsValue> {
+    let replay = parse_replay(replay_json)?;
     let game = serialize::replay_at_tick(&replay, tick);
     let units: Vec<serde_json::Value> = game
         .units
@@ -93,7 +115,7 @@ pub fn replay_frame(replay_json: &str, tick: i32) -> String {
         .collect();
     let (p0_prod, p0_cons) = game.power(crucible_sim::Player::P0);
     let (p1_prod, p1_cons) = game.power(crucible_sim::Player::P1);
-    serde_json::json!({
+    Ok(serde_json::json!({
         "tick": game.tick,
         "ore0": game.ore[0],
         "ore1": game.ore[1],
@@ -104,24 +126,24 @@ pub fn replay_frame(replay_json: &str, tick: i32) -> String {
         "winner": game.winner.map(|p| p.index() as u8),
         "win_reason": game.win_reason,
     })
-    .to_string()
+    .to_string())
 }
 
 /// Re-run a replay to completion and return the result plus a deterministic
 /// snapshot hash (FNV-1a over the serialized final state). The hash lets the
 /// browser verify native/wasm parity byte-for-byte.
 #[wasm_bindgen]
-pub fn replay_result(replay_json: &str) -> String {
-    let replay: Replay = serde_json::from_str(replay_json).expect("valid replay");
+pub fn replay_result(replay_json: &str) -> Result<String, JsValue> {
+    let replay = parse_replay(replay_json)?;
     let game = serialize::finish_replay(&replay);
     let hash = fnv1a(&serialize::snapshot_bytes(&game));
-    serde_json::json!({
+    Ok(serde_json::json!({
         "winner": game.winner.map(|p| p.index() as u8),
         "reason": game.win_reason,
         "duration_ticks": game.tick,
         "hash": hash,
     })
-    .to_string()
+    .to_string())
 }
 
 fn fnv1a(data: &[u8]) -> u64 {
@@ -150,7 +172,7 @@ mod tests {
         };
         let replay = Replay::new(seed, cfg.clone());
         let result: serde_json::Value =
-            serde_json::from_str(&replay_result(&replay.to_json())).unwrap();
+            serde_json::from_str(&replay_result(&replay.to_json()).unwrap()).unwrap();
 
         let mut game = crucible_sim::Game::new(crucible_sim::Map::generate(seed), cfg);
         while !game.is_over() {
@@ -172,7 +194,7 @@ mod tests {
         };
         let replay = Replay::new(seed, cfg.clone());
         let snap: serde_json::Value =
-            serde_json::from_str(&replay_snapshot_json(&replay.to_json(), 250)).unwrap();
+            serde_json::from_str(&replay_snapshot_json(&replay.to_json(), 250).unwrap()).unwrap();
 
         let mut game = crucible_sim::Game::new(crucible_sim::Map::generate(seed), cfg);
         while game.tick < 250 {
@@ -205,12 +227,14 @@ mod tests {
         );
         let rj = replay.to_json();
 
-        let meta: serde_json::Value = serde_json::from_str(&replay_meta(&rj)).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&replay_meta(&rj).unwrap()).unwrap();
         assert_eq!(meta["map_seed"].as_u64().unwrap(), seed);
         assert_eq!(meta["passable"].as_array().unwrap().len(), 64 * 64);
 
-        let snap: serde_json::Value = serde_json::from_str(&replay_snapshot_json(&rj, 50)).unwrap();
-        let frame: serde_json::Value = serde_json::from_str(&replay_frame(&rj, 50)).unwrap();
+        let snap: serde_json::Value =
+            serde_json::from_str(&replay_snapshot_json(&rj, 50).unwrap()).unwrap();
+        let frame: serde_json::Value =
+            serde_json::from_str(&replay_frame(&rj, 50).unwrap()).unwrap();
         assert_eq!(frame["tick"].as_i64().unwrap(), 50);
         assert_eq!(
             snap["units"].as_array().unwrap().len(),
@@ -229,5 +253,15 @@ mod tests {
             .map(|b| b["kind"].as_str().unwrap())
             .collect();
         assert!(kinds.contains(&"Hq") && kinds.contains(&"Refinery"));
+    }
+
+    #[test]
+    fn malformed_replay_returns_error_not_panic() {
+        // Browser-supplied replay data must never panic the wasm module: a
+        // panic is fatal to the page, while an Err is a catchable JS error.
+        assert!(replay_meta("{not json").is_err());
+        assert!(replay_frame("", 0).is_err());
+        assert!(replay_result("null").is_err());
+        assert!(replay_snapshot_json("[]", 10).is_err());
     }
 }

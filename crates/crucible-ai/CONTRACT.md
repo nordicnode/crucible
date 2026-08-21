@@ -13,12 +13,18 @@ scheduling, storage, and match execution are injected by `crucible-server`
 
 ## 2. The commander, not the soldier
 
-- The network is **small** (~120 inputs → 2×48 tanh → output heads; ~10–12k
+- The network is **small** (224 inputs → 2×48 tanh → output heads; ~17.6k
   params, flat `Vec<f32>`). It decides strategy on the **command tick** (every
   20 sim ticks = 2 s), never unit micro.
 - Between command ticks the world runs on the sim's scripted unit rules. The
-  AI may only issue group orders (`MoveGroup`, `TrainUnit`, `PlaceBuilding`,
-  `ChooseUpgrade`, `Sell`), exactly the human action space.
+  AI may only issue group orders (`MoveGroup`, `Attack`, `TrainUnit`,
+  `PlaceBuilding`, `ChooseUpgrade`, `Sell`), exactly the human action space.
+- The army head has **four** learned actions: attack-move, defend, scout, and
+  **focus-fire (snipe)**. When snipe wins, a second learned head picks a
+  target type (enemy harvester / refinery / HQ / factory) and the army issues
+  an `Attack` command on the best currently-visible enemy of that type — a
+  target is only ever ordered when `last_seen == tick`, so the command always
+  passes validation (a fog-legal decision with no hidden-state leak).
 - No unit-level learned micro, no neural pathfinding, no per-unit networks.
 
 ## 3. Fairness by construction
@@ -68,6 +74,12 @@ everyone else.
 ## 6. Guarantees to dependents
 
 - `policy_commands(genome, fog_view, history, tick) -> Vec<Command>` (or
-  equivalent) is pure and deterministic.
-- Every promoted champion must beat all scripted bots ≥ 90% forever
-  (regression alarm).
+  equivalent) is pure and deterministic. The `history` is the previous
+  `HISTORY_TICKS - 1` command ticks' feature vectors (oldest first), owned by
+  the caller (e.g. `GenomeBot`) and zero-padded at the start of a match; it is
+  fog-legal because it is derived from previous fog-legal observations.
+- Every promoted champion must beat the hard scripted bot ≥ 90% at bootstrap
+  (plan §5.7/M4; the CI curriculum pins a seed that clears the full
+  "all three ≥ 90%" bar). The trainer runs a periodic self-play floor check
+  (plan §5.8) that raises a `regression_alarm` event if the reigning champion
+  dips below 70% vs hard.

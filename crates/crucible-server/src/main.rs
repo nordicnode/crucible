@@ -24,6 +24,9 @@ use tower_http::services::ServeDir;
 use store::Store;
 use trainer::{TrainerConfig, TrainerShared};
 
+/// Maximum simultaneous live matches (each runs a full 10 Hz sim).
+const MAX_LIVE_MATCHES: usize = 8;
+
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) store: Arc<Store>,
@@ -31,6 +34,8 @@ pub(crate) struct AppState {
     /// Serializes expensive diagnostic simulations so they cannot starve live
     /// match handling when this server is exposed beyond localhost.
     pub(crate) diagnostics: Arc<tokio::sync::Semaphore>,
+    /// Caps concurrent live matches for the same reason.
+    pub(crate) live_matches: Arc<tokio::sync::Semaphore>,
     pub(crate) started_at: std::time::Instant,
 }
 
@@ -64,6 +69,25 @@ fn start_trainer(store: Arc<Store>, shared: Arc<TrainerShared>) {
     {
         cfg.bootstrap = true;
     }
+    // `CRUCIBLE_TRAINER_THREADS=N` caps the generation-evaluation worker pool
+    // (default: every available core). Results are bit-identical either way.
+    if let Some(n) = std::env::var("CRUCIBLE_TRAINER_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        cfg.eval_threads = n;
+    }
+
+    tracing::info!(
+        "training started: population {}, mu {}, {} self-play opponents, {} seeds/gen, {} ghosts/gen, match cap {} ticks{}",
+        cfg.population_size,
+        cfg.mu,
+        cfg.self_play_opponents,
+        cfg.seeds_per_generation,
+        cfg.ghosts_per_generation,
+        cfg.match_timeout_ticks,
+        if cfg.bootstrap { " (bootstrap on cold start)" } else { "" },
+    );
 
     tokio::task::spawn_blocking(move || {
         shared
@@ -121,19 +145,43 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
-async fn list_replays(State(state): State<AppState>) -> impl IntoResponse {
-    match state.store.list_matches(100) {
-        Ok(list) => Json(json!({ "matches": list })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+async fn list_replays(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    // SQLite calls are blocking; run them off the async runtime.
+    let res: Result<Vec<store::StoredMatch>, rusqlite::Error> =
+        blocking(move || store.list_matches(100)).await?;
+    res.map(|list| Json(json!({ "matches": list })))
+        .map_err(err)
+}
+
+async fn get_replay(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let store = state.store.clone();
+    let res: Result<Option<String>, rusqlite::Error> =
+        blocking(move || store.get_replay(id)).await?;
+    match res {
+        Ok(Some(replay)) => Ok(Json(json!({ "replay": replay }))),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "no such replay".to_string())),
+        Err(e) => Err(err(e)),
     }
 }
 
-async fn get_replay(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
-    match state.store.get_replay(id) {
-        Ok(Some(replay)) => Json(json!({ "replay": replay })).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, "no such replay").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+/// Run a blocking store operation on the blocking pool so the async runtime
+/// never stalls behind the SQLite mutex.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, (StatusCode, String)> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| err(format!("handler task failed: {e}")))
+}
+
+fn err(e: impl std::fmt::Display) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
 #[tokio::main]
@@ -159,6 +207,7 @@ async fn main() {
         store,
         trainer: trainer_shared,
         diagnostics: Arc::new(tokio::sync::Semaphore::new(1)),
+        live_matches: Arc::new(tokio::sync::Semaphore::new(MAX_LIVE_MATCHES)),
         started_at: std::time::Instant::now(),
     };
 
@@ -191,5 +240,35 @@ async fn main() {
         .await
         .expect("failed to bind");
     tracing::info!("listening on http://{addr}");
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server error");
+}
+
+/// Wait for Ctrl+C or SIGTERM so in-flight matches and the trainer's current
+/// generation can finish persisting instead of the process dying mid-write.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("shutdown signal received; draining connections");
 }

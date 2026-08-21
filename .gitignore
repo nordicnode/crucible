@@ -23,3 +23,4 @@ CRUCIBLE_development_plan.md
 # Editor / OS
 .DS_Store
 *.swp
+.omo/

@@ -6,12 +6,10 @@
 //! Pure — depends only on `crucible-sim`/`crucible-ai`. Immutability: the same
 //! inputs always produce the same commands.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crucible_ai::{Bot, DetailedOutcome, GenomeBot, MatchOutcome};
-use crucible_sim::{
-    serialize, Command, EntityId, Game, GameConfig, Map, Player, Replay, TimedCommand,
-};
+use crucible_sim::{Command, EntityId, Game, GameConfig, Map, Player, Replay, TimedCommand};
 
 use crate::fitness::shaped_fitness;
 
@@ -39,20 +37,46 @@ impl Ghost {
         commands.sort_by_key(|tc| tc.tick);
 
         // Reconstruct the ghost's entity creation order by re-running the
-        // original match (deterministic) and sorting its entities by id.
-        let game = serialize::finish_replay(replay);
-        let mut ids: Vec<EntityId> = game
-            .units
-            .iter()
-            .filter(|u| u.owner == player)
-            .map(|u| u.id)
-            .chain(
-                game.buildings
-                    .iter()
-                    .filter(|b| b.owner == player)
-                    .map(|b| b.id),
-            )
-            .collect();
+        // original match and unioning the ids of *every* entity the ghost
+        // ever created — survivors and those later destroyed or sold. Ids are
+        // allocated strictly ascending, so sorting the union yields creation
+        // order, which is the order a fresh match creates the ghost's
+        // entities too. (A survivors-only snapshot was wrong: commands
+        // referencing units that died in the original match were dropped, and
+        // survivors were mapped to the wrong creation rank whenever the two
+        // matches' live sets differed.)
+        let mut game = Game::new(Map::generate(replay.map_seed), replay.config.clone());
+        let mut created: HashSet<EntityId> = HashSet::new();
+        {
+            let mut capture = |g: &Game| {
+                for u in g.units.iter().filter(|u| u.owner == player) {
+                    created.insert(u.id);
+                }
+                for b in g.buildings.iter().filter(|b| b.owner == player) {
+                    created.insert(b.id);
+                }
+            };
+            // Step the full match exactly as `serialize::replay_to_game` does,
+            // capturing after every command application and every tick. (An
+            // entity spawned and killed within a single tick could in theory
+            // be missed; ids are never reused, so the worst case is one
+            // missing creation slot for that extremely rare event.)
+            capture(&game);
+            let mut applied = 0usize;
+            while applied < replay.commands.len() {
+                let cmd = &replay.commands[applied];
+                while game.tick < cmd.tick && !game.is_over() {
+                    game.step();
+                    capture(&game);
+                }
+                if !game.is_over() {
+                    game.apply_commands(cmd.player, std::slice::from_ref(&cmd.command));
+                    capture(&game);
+                }
+                applied += 1;
+            }
+        }
+        let mut ids: Vec<EntityId> = created.into_iter().collect();
         ids.sort_unstable();
         let id_to_index: HashMap<EntityId, usize> =
             ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
@@ -132,6 +156,17 @@ impl Ghost {
                     stance: *stance,
                 })
             }
+            Attack { units, target, .. } => {
+                let mut new_units = Vec::with_capacity(units.len());
+                for id in units {
+                    new_units.push(at(id)?);
+                }
+                Some(Attack {
+                    player,
+                    units: new_units,
+                    target: at(target)?,
+                })
+            }
             SetRally {
                 building, waypoint, ..
             } => Some(SetRally {
@@ -189,7 +224,13 @@ impl Bot for Ghost {
 /// cadence like any other AI.
 fn run_ghost_match(ghost: &mut Ghost, bot: &mut dyn Bot, config: &GameConfig) -> DetailedOutcome {
     let mut game = Game::new(Map::generate(ghost.map_seed()), config.clone());
-    let max_ticks = config.timeout_ticks + 1_000;
+    // Deadlock guard only: an unlimited config must not truncate the ghost's
+    // recorded command stream at ~100 s.
+    let max_ticks = if config.timeout_ticks > 0 {
+        config.timeout_ticks + 1_000
+    } else {
+        1_000_000
+    };
     while !game.is_over() && game.tick < max_ticks {
         let ghost_cmds = ghost.decide(&game, Player::P0);
         game.apply_commands(Player::P0, &ghost_cmds);
@@ -266,9 +307,18 @@ impl GhostPool {
             recency: self.next_recency,
         });
         self.next_recency += 1;
-        // Trim oldest (lowest recency) first.
+        // Trim to `max_size`, evicting the oldest **non-beater** first: the
+        // pool policy promises champion-beaters are retained, so a burst of
+        // ordinary matches must not push out the one strategy that beat the
+        // champion. Only when the pool is entirely beaters does the oldest
+        // beater give way.
         while self.entries.len() > self.max_size {
-            self.entries.remove(0);
+            let evict = self
+                .entries
+                .iter()
+                .position(|e| !e.beat_champion)
+                .unwrap_or(0);
+            self.entries.remove(evict);
         }
     }
 
@@ -383,6 +433,39 @@ mod tests {
     }
 
     #[test]
+    fn champion_beaters_survive_recency_eviction() {
+        // The pool must retain champion-beaters even when ordinary matches
+        // flood in afterwards; only an all-beater pool evicts its oldest.
+        let replay = sample_replay(4);
+        let g = || Ghost::from_replay(&replay, Player::P0);
+        let mut pool = GhostPool::new(2);
+        pool.add(1, g(), true); // champion-beater
+        pool.add(2, g(), false);
+        pool.add(3, g(), false); // ordinary match: evicts entry 2, not the beater
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.champion_beaters().len(), 1);
+
+        // A flood of ordinary matches still cannot evict the beater.
+        for id in 4..=50u64 {
+            pool.add(id, g(), false);
+        }
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.champion_beaters().len(), 1);
+        assert_eq!(
+            pool.champion_beaters()[0].command_count(),
+            g().command_count()
+        );
+
+        // An all-beater pool trims its oldest beater (size still respected).
+        let mut all = GhostPool::new(2);
+        all.add(1, g(), true);
+        all.add(2, g(), true);
+        all.add(3, g(), true);
+        assert_eq!(all.len(), 2);
+        assert_eq!(all.champion_beaters().len(), 2);
+    }
+
+    #[test]
     fn ghost_fitness_is_deterministic() {
         let replay = sample_replay(5);
         let ghost = Ghost::from_replay(&replay, Player::P0);
@@ -454,5 +537,80 @@ mod tests {
         assert!(outcome.outcome.duration_ticks > 21);
         assert_eq!(outcome.outcome.winner, Some(Player::P0));
         assert!(outcome.p0_value > outcome.p1_value);
+    }
+
+    #[test]
+    fn ghost_maps_entities_by_creation_order_not_survivors() {
+        // Drive a hard-vs-hard match so the ghost side (P0) suffers
+        // casualties, then verify the ghost can replay *every* recorded
+        // command against a fresh, byte-identical match. The old survivor-only
+        // mapping dropped commands whose target died in the original match and
+        // mis-ranked survivors whenever the two matches' live sets differed.
+        let cfg = GameConfig {
+            timeout_ticks: 900,
+            ..GameConfig::default()
+        };
+        let seed = 2026u64;
+        let mut game = Game::new(Map::generate(seed), cfg.clone());
+        let mut replay = Replay::new(seed, cfg.clone());
+        let mut p0 = crucible_ai::hard();
+        let mut p1 = crucible_ai::hard();
+        while !game.is_over() {
+            if game.is_command_tick() {
+                for (bot, player) in [
+                    (&mut p0 as &mut dyn crucible_ai::Bot, Player::P0),
+                    (&mut p1 as &mut dyn crucible_ai::Bot, Player::P1),
+                ] {
+                    let cmds = bot.decide(&game, player);
+                    for c in &cmds {
+                        replay.record(game.tick, player, c.clone());
+                    }
+                    game.apply_commands(player, &cmds);
+                }
+            }
+            game.step();
+        }
+
+        // The scenario must include P0 casualties for this to be a regression
+        // test of the survivor-mapping bug.
+        let p0_deaths = game
+            .events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    crucible_sim::EventKind::UnitDied {
+                        owner: Player::P0,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(p0_deaths > 0, "test scenario must include P0 casualties");
+
+        let ghost = Ghost::from_replay(&replay, Player::P0);
+
+        // Fresh match with the same seed and the same opponent is byte-identical
+        // to the original, so every recorded command must still be emitted.
+        let mut g = ghost.clone();
+        let mut fresh = Game::new(Map::generate(replay.map_seed), replay.config.clone());
+        let mut opp = crucible_ai::hard();
+        let mut emitted = 0usize;
+        let max_ticks = replay.config.timeout_ticks + 1_000;
+        while !fresh.is_over() && fresh.tick < max_ticks {
+            let cmds = g.decide(&fresh, Player::P0);
+            emitted += cmds.len();
+            fresh.apply_commands(Player::P0, &cmds);
+            if fresh.is_command_tick() {
+                let b = opp.decide(&fresh, Player::P1);
+                fresh.apply_commands(Player::P1, &b);
+            }
+            fresh.step();
+        }
+        assert_eq!(
+            emitted,
+            ghost.command_count(),
+            "ghost dropped commands during entity remapping"
+        );
     }
 }

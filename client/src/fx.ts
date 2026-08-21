@@ -181,7 +181,7 @@ export class FXEngine {
 
   /** Record track trail segment when vehicles move */
   recordVehicleMovement(id: number, kind: string, x: number, y: number, angle: number): void {
-    if (kind === "Infantry") return; // Infantry don't leave wide tank treads
+    if (kind === "Infantry" || kind === "Gunship" || kind === "Interceptor") return; // Non-tracked/air units don't leave tank treads
 
     const last = this.lastVehiclePos.get(id);
     if (!last) {

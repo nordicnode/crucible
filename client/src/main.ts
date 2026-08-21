@@ -2,12 +2,13 @@
 // All simulation rules are server-side; this renders tactical state and forwards commands.
 
 import { initDashboard } from "./dashboard";
+import { museum } from "./museum";
 import { fx } from "./fx";
 import { IntelLogger } from "./intel";
 import { Net } from "./net";
 import { drawRadar, isBuildingPlacable, Renderer } from "./renderer";
 import { spectate } from "./spectate";
-import { getThumbnailDataUrl } from "./sprites";
+import { getCursorDataUrl, getThumbnailDataUrl } from "./sprites";
 import { World, type Entity } from "./world";
 import {
   BUILDING_KINDS,
@@ -15,6 +16,7 @@ import {
   BUILD_COSTS,
   UNIT_COSTS,
   UNIT_KINDS,
+  attack,
   chooseUpgrade,
   moveGroup,
   placeBuilding,
@@ -26,6 +28,7 @@ import {
   type Command,
   type ServerMsg,
   type UnitType,
+  type Upgrade,
 } from "./types";
 
 const canvas = document.getElementById("view") as HTMLCanvasElement;
@@ -62,6 +65,8 @@ let demoTime = 0;
 let inGame = false;
 let selection = new Set<number>();
 let placementMode: BuildingType | null = null;
+/** The player's currently researched upgrade ("None" until one is chosen). */
+let myUpgrade: Upgrade = "None";
 let placementCursor: [number, number] | null = null;
 let opponentLabel = "hard";
 
@@ -102,6 +107,7 @@ function onServerMsg(msg: ServerMsg): void {
       el("lobby").classList.add("hidden");
       el("result").classList.add("hidden");
       el("dashboard").classList.add("hidden");
+      el("museum").classList.add("hidden");
       el("spectate-list").classList.add("hidden");
       el("sidebar").classList.remove("hidden");
       el("topbar").classList.remove("hidden");
@@ -109,6 +115,8 @@ function onServerMsg(msg: ServerMsg): void {
       el("opponent").textContent = opponentLabel.toUpperCase();
       unitWaypoints.clear();
       prevEntityHp.clear();
+      myUpgrade = "None";
+      incomeWindow = [];
       intel.clear();
       intel.addEntry(0, "Tactical link active. Operation underway.", "info", "LINK");
       lastRenderedLogCount = -1;
@@ -164,7 +172,19 @@ function onServerMsg(msg: ServerMsg): void {
         }
       }
 
-      world.applyDiff(msg.tick, msg.ore, msg.entities, msg.oreTiles, msg.visible, msg.events);
+      world.applyDiff(
+        msg.tick,
+        msg.ore,
+        msg.entities,
+        msg.oreTiles,
+        msg.visible,
+        msg.events,
+        // Use the server's authoritative power numbers (the client's static
+        // table is only a fallback for menus/spectate).
+        { produced: msg.powerProduced ?? 0, consumed: msg.powerConsumed ?? 0 },
+      );
+      // Server-authoritative research state (drives the lab's command card).
+      if (msg.upgrade) myUpgrade = msg.upgrade;
 
       for (const ev of msg.events) {
         if (ev.kind === "ore_deposited" && (ev as unknown as { amount?: number }).amount != null) {
@@ -178,11 +198,19 @@ function onServerMsg(msg: ServerMsg): void {
     case "matchEnd": {
       inGame = false;
       world.result = { winner: msg.winner, reason: msg.reason };
-      const win = msg.winner === 0;
-      el("result-title").textContent = win ? "VICTORY" : "DEFEAT";
-      el("result-title").className = win ? "win" : "lose";
+      // A draw arrives with `winner: null`; it must not render as a defeat.
+      const title =
+        msg.winner === null ? "DRAW" : msg.winner === 0 ? "VICTORY" : "DEFEAT";
+      el("result-title").textContent = title;
+      el("result-title").className =
+        msg.winner === null ? "draw" : msg.winner === 0 ? "win" : "lose";
       el("result-detail").textContent =
         `${msg.reason} · ${formatClock(msg.durationTicks)} · replay #${msg.replayId ?? "?"}`;
+      // Plan §8: tell the player their match feeds the trainer's ghost pool.
+      el("result-ghost").textContent =
+        msg.replayId != null
+          ? "This match is now a training ghost — the AI will study it."
+          : "";
       el("overlay").classList.remove("hidden");
       el("lobby").classList.add("hidden");
       el("result").classList.remove("hidden");
@@ -190,6 +218,14 @@ function onServerMsg(msg: ServerMsg): void {
     }
     case "commandRejected": {
       intel.addEntry(world.tick, `Order rejected: ${msg.reason}`, "warn", "ORDER");
+      break;
+    }
+    case "serverBusy": {
+      // Server is at its concurrent-match capacity: back to the lobby with a
+      // visible reason instead of silently hanging on a dead connection.
+      showLobby();
+      el("lobby-status").textContent =
+        "All tactical channels busy — try again in a moment.";
       break;
     }
   }
@@ -201,6 +237,7 @@ function startMatch(which: string, label?: string): void {
   selection = new Set();
   placementMode = null;
   placementCursor = null;
+  incomeWindow = [];
   intel.clear();
   lastRenderedLogCount = -1;
   net.close();
@@ -216,6 +253,7 @@ function showLobby(): void {
   el("sidebar").classList.add("hidden");
   el("topbar").classList.add("hidden");
   el("log").classList.add("hidden");
+  el("lobby-status").textContent = "";
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +410,20 @@ canvas.addEventListener("mousedown", (ev) => {
     placementCursor = null;
     lastPanelSig = "";
     renderCommandSidebar();
-    issueMove(tileAt(sx, sy));
+    const [tx, ty] = tileAt(sx, sy);
+    // C&C right-click: an enemy under the cursor gets focus-fired by the
+    // selected combat units (harvesters can't fire and would reject the whole
+    // batch server-side); open ground is an attack-move instead.
+    const target = enemyEntityAt(tx, ty);
+    const units = selectedUnits().filter((id) => {
+      const e = world.entities.get(id);
+      return e && e.kind !== "Harvester";
+    });
+    if (target && units.length > 0) {
+      sendCommands([attack(units, target.id)]);
+    } else {
+      issueMove([tx, ty]);
+    }
   }
 });
 
@@ -388,6 +439,8 @@ canvas.addEventListener("mousemove", (ev) => {
   }
 
   if (!inGame) return;
+
+  updateCursor(sx, sy);
 
   if (minimapDragging) {
     const mmPos = renderer.minimapToWorld(sx, sy, canvas.width, canvas.height);
@@ -482,12 +535,46 @@ canvas.addEventListener("wheel", (ev) => {
 
 canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
+// C&C-style control groups: Ctrl+1..9 assigns the current selection, 1..9
+// recalls it. F1..F4 switch the command-sidebar tabs (keyboard-first play).
+const controlGroups = new Map<number, Set<number>>();
+
 window.addEventListener("keydown", (ev) => {
   keysPressed.add(ev.code);
   if (ev.key === "Escape") {
     placementMode = null;
     placementCursor = null;
     toolMode = null;
+    lastPanelSig = "";
+    renderCommandSidebar();
+    return;
+  }
+  if (!inGame) return;
+
+  const groupIdx = /^[1-9]$/.exec(ev.key) ? Number(ev.key) : null;
+  if (groupIdx !== null) {
+    if (ev.ctrlKey || ev.metaKey) {
+      // Assign: save the current selection (units only; buildings stay put).
+      controlGroups.set(groupIdx, new Set(world.ownUnits.map((u) => u.id)));
+    } else if (controlGroups.has(groupIdx)) {
+      // Recall: select the group (Shift adds instead of replacing).
+      selection = new Set(controlGroups.get(groupIdx)!);
+      lastPanelSig = "";
+      renderCommandSidebar();
+    }
+    return;
+  }
+
+  const tabFor = (key: string): CommandTab | null => {
+    if (key === "F1") return "buildings";
+    if (key === "F2") return "troops";
+    if (key === "F3") return "vehicles";
+    if (key === "F4") return "aircraft";
+    return null;
+  };
+  const tab = tabFor(ev.key);
+  if (tab) {
+    activeTab = tab;
     lastPanelSig = "";
     renderCommandSidebar();
   }
@@ -593,6 +680,86 @@ function buildingAt(tx: number, ty: number): Entity | null {
   return null;
 }
 
+/** True if any enemy unit or building occupies (or stands within ~1 tile of) the hovered tile. */
+function enemyAt(tx: number, ty: number): boolean {
+  return enemyEntityAt(tx, ty) != null;
+}
+
+/**
+ * The enemy entity under the hovered tile — buildings win on an exact tile
+ * match, units within ~1 tile of the cursor (nearest wins). Only freshly seen
+ * enemies are attackable: a faded last-seen ghost may no longer exist, and the
+ * sim would reject the order.
+ */
+function enemyEntityAt(tx: number, ty: number): Entity | null {
+  let best: Entity | null = null;
+  let bestD2 = Infinity;
+  for (const e of world.enemyEntities) {
+    // Recently seen (within 2 s of the last diff) = currently on screen.
+    const stale = e.stale ?? -Infinity;
+    if (world.tick - stale >= 20) continue;
+    if (BUILDING_KINDS.has(e.kind)) {
+      if (Math.floor(e.x) === tx && Math.floor(e.y) === ty) return e;
+    } else if (UNIT_KINDS.has(e.kind)) {
+      const dx = e.x - (tx + 0.5);
+      const dy = e.y - (ty + 0.5);
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= 1.0 && d2 < bestD2) {
+        best = e;
+        bestD2 = d2;
+      }
+    }
+  }
+  return best;
+}
+
+/** Whether the current selection includes anything that can fire (non-harvester units, turrets). */
+function hasAttackCapableSelection(): boolean {
+  for (const id of selection) {
+    const e = world.entities.get(id);
+    if (!e) continue;
+    if (UNIT_KINDS.has(e.kind) && e.kind !== "Harvester") return true;
+    if (e.kind === "Turret" || e.kind === "TeslaCoil") return true;
+  }
+  return false;
+}
+
+/**
+ * C&C-style contextual cursor: crosshair over enemies with attack-capable
+ * units selected, a $ over sellable buildings, and a wrench over damaged ones.
+ */
+function updateCursor(sx: number, sy: number): void {
+  if (panning) {
+    canvas.style.cursor = "grabbing";
+    return;
+  }
+  const [tx, ty] = tileAt(sx, sy);
+
+  if (toolMode === "sell") {
+    const b = buildingAt(tx, ty);
+    canvas.style.cursor =
+      b && b.kind !== "Hq" ? getCursorDataUrl("sell") : "default";
+    return;
+  }
+  if (toolMode === "repair") {
+    const b = buildingAt(tx, ty);
+    canvas.style.cursor =
+      b && b.hp < b.maxHp ? getCursorDataUrl("repair") : "default";
+    return;
+  }
+  if (placementMode) {
+    canvas.style.cursor = isBuildingPlacable(placementMode, [tx, ty], world)
+      ? "crosshair"
+      : "not-allowed";
+    return;
+  }
+  if (hasAttackCapableSelection() && enemyAt(tx, ty)) {
+    canvas.style.cursor = getCursorDataUrl("attack");
+    return;
+  }
+  canvas.style.cursor = "default";
+}
+
 let lastPanelSig = "";
 
 function cmdButton(
@@ -669,7 +836,9 @@ function renderCommandSidebar(): void {
     "|" +
     world.ore +
     "|" +
-    bCounts;
+    bCounts +
+    "|" +
+    myUpgrade;
   if (sig === lastPanelSig) return;
   lastPanelSig = sig;
 
@@ -746,18 +915,38 @@ function renderCommandSidebar(): void {
   grid.innerHTML = "";
   empty.classList.add("hidden");
 
-  // Contextual upgrades if TechLab is selected
+  // Contextual upgrades if TechLab is selected. Once one research is chosen
+  // the others lock, and the active one stays highlighted (server-authoritative
+  // `myUpgrade` keeps this true even after reselecting the lab).
   if (selEntity && selEntity.kind === "TechLab" && selEntity.owner === 0) {
-    grid.appendChild(cmdButton("Damage", 0, () => sendCommands([chooseUpgrade(single!, "Damage")])));
-    grid.appendChild(cmdButton("Hp", 0, () => sendCommands([chooseUpgrade(single!, "Hp")])));
+    for (const up of ["Damage", "Hp", "Range"] as Upgrade[]) {
+      const isActive = myUpgrade === up;
+      const isLocked = myUpgrade !== "None" && !isActive;
+      grid.appendChild(
+        cmdButton(up, 0, () => sendCommands([chooseUpgrade(single!, up)]), {
+          armed: isActive,
+          disabled: isActive || isLocked,
+          disabledReason: isActive
+            ? "ACTIVE RESEARCH"
+            : isLocked
+              ? "ONE RESEARCH ONLY"
+              : undefined,
+        }),
+      );
+    }
   }
 
   if (activeTab === "buildings") {
     const hasFactory = world.ownBuildings.some((b) => b.kind === "Factory");
-    const buildings: BuildingType[] = ["PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Turret"];
+    const hasLab = world.ownBuildings.some((b) => b.kind === "TechLab");
+    const buildings: BuildingType[] = ["PowerPlant", "Refinery", "Barracks", "Factory", "TechLab", "Airfield", "Radar", "TeslaCoil", "Turret"];
     for (const b of buildings) {
-      const isTech = b === "TechLab" || b === "Airfield";
-      const isLocked = isTech && !hasFactory;
+      // Tech tree: TechLab & Airfield need a Factory; Radar & TeslaCoil are
+      // the second tier and need the TechLab itself.
+      const needsFactory = b === "TechLab" || b === "Airfield";
+      const needsLab = b === "Radar" || b === "TeslaCoil";
+      const isLocked = (needsFactory && !hasFactory) || (needsLab && !hasLab);
+      const reason = needsLab && !hasLab ? "REQUIRES TECH LAB" : needsFactory && !hasFactory ? "REQUIRES FACTORY" : undefined;
       grid.appendChild(
         cmdButton(
           b,
@@ -772,7 +961,7 @@ function renderCommandSidebar(): void {
           {
             armed: placementMode === b,
             disabled: isLocked,
-            disabledReason: isLocked ? "REQUIRES FACTORY" : undefined,
+            disabledReason: reason,
           },
         ),
       );
@@ -797,17 +986,17 @@ function renderCommandSidebar(): void {
   } else if (activeTab === "vehicles") {
     const factory = world.ownBuildings.find((b) => b.kind === "Factory");
     const hasLab = world.ownBuildings.some((b) => b.kind === "TechLab");
-    const vehicles: UnitType[] = ["Harvester", "Tank", "Artillery"];
+    const vehicles: UnitType[] = ["Harvester", "Tank", "Artillery", "MammothTank"];
     for (const v of vehicles) {
-      const isArtillery = v === "Artillery";
-      const isLocked = !factory || (isArtillery && !hasLab);
-      const reason = !factory ? "REQUIRES FACTORY" : isArtillery && !hasLab ? "REQUIRES TECH LAB" : undefined;
+      const needsLab = v === "Artillery" || v === "MammothTank";
+      const isLocked = !factory || (needsLab && !hasLab);
+      const reason = !factory ? "REQUIRES FACTORY" : needsLab && !hasLab ? "REQUIRES TECH LAB" : undefined;
       grid.appendChild(
         cmdButton(
           v,
           UNIT_COSTS[v],
           () => {
-            if (factory && (!isArtillery || hasLab)) {
+            if (factory && (!needsLab || hasLab)) {
               sendCommands([trainUnit(factory.id, v)]);
             }
           },
@@ -820,28 +1009,24 @@ function renderCommandSidebar(): void {
     }
   } else if (activeTab === "aircraft") {
     const airfield = world.ownBuildings.find((b) => b.kind === "Airfield");
-    grid.appendChild(
-      cmdButton(
-        "Gunship",
-        120,
-        () => {},
-        {
-          disabled: !airfield,
-          disabledReason: airfield ? undefined : "REQUIRES AIRFIELD",
-        },
-      ),
-    );
-    grid.appendChild(
-      cmdButton(
-        "Interceptor",
-        150,
-        () => {},
-        {
-          disabled: !airfield,
-          disabledReason: airfield ? undefined : "REQUIRES AIRFIELD",
-        },
-      ),
-    );
+    const aircraft: UnitType[] = ["Gunship", "Interceptor"];
+    for (const a of aircraft) {
+      grid.appendChild(
+        cmdButton(
+          a,
+          UNIT_COSTS[a],
+          () => {
+            if (airfield) {
+              sendCommands([trainUnit(airfield.id, a)]);
+            }
+          },
+          {
+            disabled: !airfield,
+            disabledReason: airfield ? undefined : "REQUIRES AIRFIELD",
+          },
+        ),
+      );
+    }
   }
 }
 
@@ -1186,6 +1371,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-opp]").forEach((btn) => {
   btn.addEventListener("click", () => startMatch(btn.dataset.opp!, btn.dataset.label));
 });
 initDashboard();
+museum.init();
 initToolAndTabIcons();
 spectate.init();
 void initOpponentPicker();

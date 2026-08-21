@@ -41,6 +41,8 @@ pub enum BuildingType {
     Factory,
     TechLab,
     Airfield,
+    Radar,
+    TeslaCoil,
     Turret,
 }
 
@@ -50,6 +52,9 @@ pub enum UnitType {
     Infantry,
     Tank,
     Artillery,
+    MammothTank,
+    Gunship,
+    Interceptor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Debug)]
@@ -67,6 +72,7 @@ pub enum Upgrade {
     None,
     Damage,
     Hp,
+    Range,
 }
 
 /// Unique entity id within a match.
@@ -93,6 +99,9 @@ pub struct UnitStats {
     pub splash: Fix,
     /// Production time in ticks.
     pub build_time: i32,
+    /// Whether the unit flies: it ignores building blockers (flies over
+    /// buildings) while still respecting map terrain passability.
+    pub air: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -128,6 +137,7 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             vision: tiles(4),
             splash: 0,
             build_time: TICKS_PER_SEC * 20,
+            air: false,
         },
         Infantry => UnitStats {
             cost: 50,
@@ -140,6 +150,7 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             vision: tiles(4),
             splash: 0,
             build_time: TICKS_PER_SEC * 8,
+            air: false,
         },
         Tank => UnitStats {
             cost: 150,
@@ -152,6 +163,7 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             vision: tiles(5),
             splash: 0,
             build_time: TICKS_PER_SEC * 16,
+            air: false,
         },
         // Balance-tuned for positional combat: `min_range`/`cooldown` keep
         // artillery a counter to tanks (outranges them) while infantry closes
@@ -168,6 +180,52 @@ pub const fn unit_stats(ut: UnitType) -> UnitStats {
             vision: tiles(6),
             splash: 0,
             build_time: TICKS_PER_SEC * 20,
+            air: false,
+        },
+        // Heavy siege armor (tech-lab tier): slow, extremely durable, and hits
+        // harder than anything else on the ground. A counter to the massed
+        // tank midgame, but kited by artillery and harassed from the air.
+        MammothTank => UnitStats {
+            cost: 400,
+            hp: 300,
+            damage: 40,
+            range: tiles(3),
+            min_range: 0,
+            speed: 14, // 0.55 tiles/s
+            cooldown: TICKS_PER_SEC * 15 / 10,
+            vision: tiles(5),
+            splash: 0,
+            build_time: TICKS_PER_SEC * 24,
+            air: false,
+        },
+        // Fast strike aircraft (airfield-built). Fragile but mobile: the
+        // gunship out-ranges and out-speeds tanks; the interceptor is a quick
+        // skirmisher for harassing harvesters and mopping up artillery.
+        Gunship => UnitStats {
+            cost: 250,
+            hp: 90,
+            damage: 16,
+            range: tiles(3) + FIX_SCALE / 2,
+            min_range: 0,
+            speed: 32, // 1.25 tiles/s
+            cooldown: TICKS_PER_SEC * 10 / 10,
+            vision: tiles(5),
+            splash: 0,
+            build_time: TICKS_PER_SEC * 20,
+            air: true,
+        },
+        Interceptor => UnitStats {
+            cost: 300,
+            hp: 70,
+            damage: 22,
+            range: tiles(3),
+            min_range: 0,
+            speed: 44, // 1.75 tiles/s
+            cooldown: TICKS_PER_SEC * 8 / 10,
+            vision: tiles(6),
+            splash: 0,
+            build_time: TICKS_PER_SEC * 16,
+            air: true,
         },
     }
 }
@@ -238,6 +296,28 @@ pub const fn building_stats(bt: BuildingType) -> BuildingStats {
             cooldown: 0,
             power: -25,
         },
+        // Long-range early-warning dish: reveals a huge swath of the map so
+        // scouting happens passively. The tech payoff for map awareness.
+        Radar => BuildingStats {
+            cost: 150,
+            hp: 300,
+            vision: tiles(10),
+            damage: 0,
+            range: 0,
+            cooldown: 0,
+            power: -10,
+        },
+        // High-voltage coil defense: a turret that outranges and out-hits the
+        // standard turret (4.5 tiles, 24 dmg, fast fire), gated on the TechLab.
+        TeslaCoil => BuildingStats {
+            cost: 250,
+            hp: 200,
+            vision: tiles(4),
+            damage: 24,
+            range: tiles(4) + FIX_SCALE / 2,
+            cooldown: TICKS_PER_SEC * 6 / 10,
+            power: -30,
+        },
         Turret => BuildingStats {
             cost: 100,
             hp: 150,
@@ -269,7 +349,8 @@ pub fn building_produces(bt: BuildingType) -> &'static [UnitType] {
     use UnitType::*;
     match bt {
         Barracks => &[Infantry],
-        Factory => &[Harvester, Tank, Artillery],
+        Factory => &[Harvester, Tank, Artillery, MammothTank],
+        Airfield => &[Gunship, Interceptor],
         _ => &[],
     }
 }
@@ -369,28 +450,6 @@ impl Unit {
     }
 }
 
-/// Aggregate entity container (units + buildings), id-assignment order stable.
-#[derive(Default)]
-pub struct EntityAllocator {
-    next_id: EntityId,
-}
-
-impl EntityAllocator {
-    pub fn new() -> Self {
-        EntityAllocator { next_id: 1 }
-    }
-
-    pub fn alloc(&mut self) -> EntityId {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-
-    pub fn peek_next(&self) -> EntityId {
-        self.next_id
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,11 +474,17 @@ mod tests {
         );
         assert_eq!(
             building_produces(BuildingType::Factory),
-            &[UnitType::Harvester, UnitType::Tank, UnitType::Artillery]
+            &[
+                UnitType::Harvester,
+                UnitType::Tank,
+                UnitType::Artillery,
+                UnitType::MammothTank
+            ]
         );
         assert!(building_produces(BuildingType::Hq).is_empty());
         assert!(building_produces(BuildingType::PowerPlant).is_empty());
-        assert!(building_produces(BuildingType::Airfield).is_empty());
+        assert!(building_produces(BuildingType::Airfield).contains(&UnitType::Gunship));
+        assert!(building_produces(BuildingType::Airfield).contains(&UnitType::Interceptor));
     }
 
     #[test]
@@ -432,5 +497,31 @@ mod tests {
         assert!(building_stats(BuildingType::Turret).power < 0);
         assert!(building_stats(BuildingType::TechLab).power < 0);
         assert!(building_stats(BuildingType::Airfield).power < 0);
+        assert!(building_stats(BuildingType::Radar).power < 0);
+        assert!(building_stats(BuildingType::TeslaCoil).power < 0);
+        assert!(unit_stats(UnitType::MammothTank).hp > unit_stats(UnitType::Tank).hp);
+        assert!(unit_stats(UnitType::MammothTank).damage > unit_stats(UnitType::Tank).damage);
+        assert!(unit_stats(UnitType::MammothTank).speed < unit_stats(UnitType::Tank).speed);
+        assert!(!unit_stats(UnitType::MammothTank).air);
+        // The TeslaCoil outranges and out-damages the standard turret.
+        assert!(
+            building_stats(BuildingType::TeslaCoil).range
+                > building_stats(BuildingType::Turret).range
+        );
+        assert!(
+            building_stats(BuildingType::TeslaCoil).damage
+                > building_stats(BuildingType::Turret).damage
+        );
+        // Radar sees much further than anything else.
+        assert!(
+            building_stats(BuildingType::Radar).vision > building_stats(BuildingType::Hq).vision
+        );
+        assert!(unit_stats(UnitType::Gunship).speed > unit_stats(UnitType::Tank).speed);
+        assert!(unit_stats(UnitType::Interceptor).speed > unit_stats(UnitType::Gunship).speed);
+        // Only aircraft fly (ignore building blockers).
+        assert!(unit_stats(UnitType::Gunship).air);
+        assert!(unit_stats(UnitType::Interceptor).air);
+        assert!(!unit_stats(UnitType::Tank).air);
+        assert!(!unit_stats(UnitType::Harvester).air);
     }
 }

@@ -22,6 +22,9 @@ pub struct GameConfig {
     /// Fraction of a building's cost refunded on sell (50/100 = 50%).
     pub sell_refund_num: i32,
     pub sell_refund_den: i32,
+    /// Match length cap in ticks. `<= 0` disables the timeout entirely (live
+    /// matches are unlimited; training matches set an explicit cap so
+    /// degenerate games cannot run forever).
     pub timeout_ticks: i32,
 }
 
@@ -377,10 +380,13 @@ impl Game {
                 let mut moves: Vec<(EntityId, Vec<(u8, u8)>)> = Vec::new();
                 for (i, id) in units.iter().enumerate() {
                     if let Some(u) = self.unit(player, *id) {
-                        let tile = formation_tile(*waypoint, i, &self.map, &blocked);
+                        // Aircraft fly over buildings: their formation tiles
+                        // and paths ignore the blocked overlay.
+                        let fly = unit_stats(u.utype).air;
+                        let tile = formation_tile(*waypoint, i, &self.map, &blocked, fly);
                         let path = self
                             .map
-                            .find_path(u.pos.tile(), tile, &blocked)
+                            .find_path(u.pos.tile(), tile, &blocked, fly)
                             .unwrap_or_default();
                         moves.push((*id, path));
                     }
@@ -400,6 +406,19 @@ impl Game {
                         u.path = path;
                         u.target = None;
                         u.fleeing = false;
+                    }
+                }
+            }
+            Command::Attack { units, target, .. } => {
+                // Focus-fire: every ordered unit locks onto the single target
+                // and paths to it. Combat keeps the order until the target
+                // dies or leaves vision.
+                for id in units {
+                    if let Some(u) = self.unit_mut(player, *id) {
+                        u.target = Some(*target);
+                        u.fleeing = false;
+                        u.path = Vec::new();
+                        u.order = crate::entity::UnitOrder::Attack { target: *target };
                     }
                 }
             }
@@ -513,8 +532,8 @@ impl Game {
             self.over = true;
             return;
         }
-        // Timeout?
-        if self.tick >= self.config.timeout_ticks {
+        // Timeout? (`timeout_ticks <= 0` means no time limit.)
+        if self.config.timeout_ticks > 0 && self.tick >= self.config.timeout_ticks {
             let v0 = self.remaining_value(Player::P0);
             let v1 = self.remaining_value(Player::P1);
             self.win_reason = Some(WinReason::Timeout);
@@ -732,15 +751,305 @@ mod tests {
         let mut g = Game::new(
             Map::generate(1),
             GameConfig {
-                timeout_ticks: 0,
+                timeout_ticks: 10,
                 ..GameConfig::default()
             },
         );
+        g.tick = 10;
 
         g.check_win();
 
         assert!(g.is_over());
         assert_eq!(g.winner, None);
         assert_eq!(g.win_reason, Some(WinReason::Timeout));
+    }
+
+    #[test]
+    fn aircraft_fly_over_buildings_ground_routes_around() {
+        use crate::entity::{Unit, UnitOrder, UnitType};
+        use crate::fixed::Pos;
+
+        let mut g = Game::new(crate::map::open_test_map(1), GameConfig::default());
+        // Mid-map, far from both HQs ((53,53) and (10,10)) so the test units
+        // never engage the enemy harvester/HQ and just follow their move
+        // order. A solid vertical wall of buildings at x=33, y=28..=32 (all
+        // P0's own, purely as terrain for this movement test).
+        for y in 28..=32u8 {
+            let id = g.alloc_id();
+            g.buildings.push(Building {
+                id,
+                owner: Player::P0,
+                btype: BuildingType::Refinery,
+                tile: (33, y),
+                hp: 400,
+                max_hp: 400,
+                queue: Vec::new(),
+                progress: 0,
+                rally: None,
+                cooldown: 0,
+            });
+        }
+
+        // A tank (ground) and a gunship (air) both start west of the wall and
+        // are ordered to the far side: (36, 30) is straight east through it.
+        let place = |g: &mut Game, utype: UnitType| {
+            let stats = unit_stats(utype);
+            let id = g.alloc_id();
+            g.units.push(Unit {
+                id,
+                owner: Player::P0,
+                utype,
+                pos: Pos::from_tile(30, 30),
+                hp: stats.hp,
+                max_hp: stats.hp,
+                stance: Stance::Aggressive,
+                order: UnitOrder::Move {
+                    waypoint: Pos::from_tile(36, 30),
+                    stance: Stance::Aggressive,
+                },
+                carrying: 0,
+                cooldown: 0,
+                park_ticks: 0,
+                path: Vec::new(),
+                target: None,
+                fleeing: false,
+                harvest_tile: None,
+                refinery: None,
+            });
+        };
+        place(&mut g, UnitType::Tank);
+        place(&mut g, UnitType::Gunship);
+
+        // 60 ticks = 6 s: the gunship (1.25 tiles/s) crosses the wall in a
+        // straight line; the tank must route around it and stays west.
+        for _ in 0..60 {
+            g.step();
+        }
+        let gunship = g
+            .units
+            .iter()
+            .find(|u| u.utype == UnitType::Gunship)
+            .unwrap();
+        let tank = g.units.iter().find(|u| u.utype == UnitType::Tank).unwrap();
+        // The gunship flies straight over the wall and reaches the destination
+        // tile (36,30) in 60 ticks (6 tiles at 1.25 tiles/s).
+        assert_eq!(
+            gunship.pos,
+            Pos::from_tile(36, 30),
+            "gunship should fly straight over the building wall (pos={:?})",
+            gunship.pos
+        );
+        // The tank detours around the wall: it is north of the wall line
+        // (heading up through y=27), so it must not be walking through it.
+        assert!(
+            tank.pos.y < Pos::from_tile(30, 30).y - crate::fixed::FIX_SCALE,
+            "tank must route around the wall, not through it (y={})",
+            tank.pos.y
+        );
+    }
+
+    #[test]
+    fn attack_order_focus_fires_specific_target() {
+        use crate::entity::{Unit, UnitOrder, UnitType};
+        use crate::fixed::Pos;
+        use crate::orders::Command;
+
+        let mut g = Game::new(crate::map::open_test_map(1), GameConfig::default());
+        g.ore = [10_000, 10_000];
+
+        // P0 tank at (30,30); two P1 infantry both inside its fire range at
+        // (31,30) and (31,31). Auto-acquire would pick the lowest-HP/lowest-id
+        // enemy; the Attack order must instead lock onto the ordered one and
+        // ignore the other until it is gone.
+        let spawn = |g: &mut Game, owner: Player, utype: UnitType, tile: (u8, u8)| {
+            let stats = unit_stats(utype);
+            let id = g.alloc_id();
+            g.units.push(Unit {
+                id,
+                owner,
+                utype,
+                pos: Pos::from_tile(tile.0, tile.1),
+                hp: stats.hp,
+                max_hp: stats.hp,
+                stance: Stance::Aggressive,
+                order: UnitOrder::Idle,
+                carrying: 0,
+                cooldown: 0,
+                park_ticks: 0,
+                path: Vec::new(),
+                target: None,
+                fleeing: false,
+                harvest_tile: None,
+                refinery: None,
+            });
+            id
+        };
+        let tank = spawn(&mut g, Player::P0, UnitType::Tank, (30, 30));
+        let a = spawn(&mut g, Player::P1, UnitType::Infantry, (31, 30));
+        let b = spawn(&mut g, Player::P1, UnitType::Infantry, (31, 31));
+
+        // Ordered target is `b` — the *higher* id, i.e. NOT the auto-acquire
+        // pick (tie-break is lowest id).
+        let res = g.apply_commands(
+            Player::P0,
+            &[Command::Attack {
+                player: Player::P0,
+                units: vec![tank],
+                target: b,
+            }],
+        );
+        assert!(res[0].is_ok());
+
+        // 10 ticks = one tank shot (cooldown 12): the ordered target takes the
+        // damage while the other infantry stays untouched — focus fire, not
+        // auto-acquire.
+        for _ in 0..10 {
+            g.step();
+        }
+        let hp_of = |id: EntityId| g.units.iter().find(|u| u.id == id).unwrap().hp;
+        assert_eq!(
+            hp_of(b),
+            44 - 20,
+            "ordered target must take the tank's fire"
+        );
+        assert_eq!(
+            hp_of(a),
+            44,
+            "un-ordered enemy must be ignored (no auto-acquire)"
+        );
+
+        // Harvester (damage 0) cannot be ordered to attack.
+        let h = spawn(&mut g, Player::P0, UnitType::Harvester, (29, 30));
+        let res = g.apply_commands(
+            Player::P0,
+            &[Command::Attack {
+                player: Player::P0,
+                units: vec![h],
+                target: b,
+            }],
+        );
+        assert!(matches!(
+            res[0],
+            Err(crate::orders::CommandError::NotACombatant)
+        ));
+
+        // Attacking an own unit is rejected (not an enemy target).
+        let res = g.apply_commands(
+            Player::P0,
+            &[Command::Attack {
+                player: Player::P0,
+                units: vec![tank],
+                target: h,
+            }],
+        );
+        assert!(matches!(
+            res[0],
+            Err(crate::orders::CommandError::NoSuchTarget)
+        ));
+    }
+
+    #[test]
+    fn tech_tree_gates_second_tier() {
+        use crate::entity::{BuildingType, UnitType, Upgrade};
+        let mut g = Game::new(crate::map::open_test_map(1), GameConfig::default());
+        g.ore = [100_000, 100_000];
+        let hq = g.hq(Player::P0).unwrap().tile;
+
+        let place = |g: &mut Game, bt: BuildingType, tile: (u8, u8)| {
+            g.apply_commands(
+                Player::P0,
+                &[Command::PlaceBuilding {
+                    player: Player::P0,
+                    btype: bt,
+                    tile,
+                }],
+            )
+            .remove(0)
+        };
+        let train = |g: &mut Game, building: EntityId, ut: UnitType| {
+            g.apply_commands(
+                Player::P0,
+                &[Command::TrainUnit {
+                    player: Player::P0,
+                    building,
+                    utype: ut,
+                }],
+            )
+            .remove(0)
+        };
+
+        // Without a TechLab, the second tier is locked.
+        assert_eq!(
+            place(&mut g, BuildingType::Radar, (hq.0 + 3, hq.1)),
+            Err(CommandError::RequiresTechLab)
+        );
+        assert_eq!(
+            place(&mut g, BuildingType::TeslaCoil, (hq.0 + 3, hq.1 + 1)),
+            Err(CommandError::RequiresTechLab)
+        );
+
+        // TechLab requires a Factory.
+        assert_eq!(
+            place(&mut g, BuildingType::TechLab, (hq.0 + 3, hq.1)),
+            Err(CommandError::RequiresFactory)
+        );
+
+        // Factory + TechLab unlock the second tier.
+        let f = place(&mut g, BuildingType::Factory, (hq.0 + 1, hq.1));
+        assert!(f.is_ok());
+        assert!(place(&mut g, BuildingType::TechLab, (hq.0 + 3, hq.1)).is_ok());
+        assert!(place(&mut g, BuildingType::Radar, (hq.0 + 3, hq.1 + 2)).is_ok());
+        assert!(place(&mut g, BuildingType::TeslaCoil, (hq.0 + 3, hq.1 + 3)).is_ok());
+
+        // MammothTank needs the TechLab too.
+        let factory = g
+            .buildings
+            .iter()
+            .find(|b| b.btype == BuildingType::Factory)
+            .unwrap()
+            .id;
+        assert!(train(&mut g, factory, UnitType::MammothTank).is_ok());
+
+        // A lab researches any of the three upgrades, once per player.
+        for up in [Upgrade::Damage, Upgrade::Hp, Upgrade::Range] {
+            let mut g2 = Game::new(crate::map::open_test_map(1), GameConfig::default());
+            g2.ore = [100_000, 100_000];
+            assert!(place(&mut g2, BuildingType::Factory, (hq.0 + 1, hq.1)).is_ok());
+            assert!(place(&mut g2, BuildingType::TechLab, (hq.0 + 3, hq.1)).is_ok());
+            let lab2 = g2
+                .buildings
+                .iter()
+                .find(|b| b.btype == BuildingType::TechLab)
+                .unwrap()
+                .id;
+            assert!(g2
+                .apply_commands(
+                    Player::P0,
+                    &[Command::ChooseUpgrade {
+                        player: Player::P0,
+                        lab: lab2,
+                        upgrade: up,
+                    }]
+                )
+                .remove(0)
+                .is_ok());
+            assert_eq!(g2.upgrades[0], up);
+        }
+    }
+
+    #[test]
+    fn zero_timeout_means_unlimited() {
+        let mut g = Game::new(
+            Map::generate(1),
+            GameConfig {
+                timeout_ticks: 0, // no time limit
+                ..GameConfig::default()
+            },
+        );
+        // Well past any sane limit: the match must keep going.
+        for _ in 0..10_000 {
+            g.step();
+        }
+        assert!(!g.is_over(), "a 0 timeout must disable the time limit");
     }
 }

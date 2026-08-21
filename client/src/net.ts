@@ -24,8 +24,13 @@ export class Net {
     };
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
-      const msg = JSON.parse(ev.data as string) as ServerMsg;
-      onMessage(msg);
+      try {
+        const msg = JSON.parse(ev.data as string) as ServerMsg;
+        onMessage(msg);
+      } catch (e) {
+        // One malformed frame must not kill the session: log and skip it.
+        console.error("dropping unparseable server message", e, ev.data);
+      }
     };
     ws.onclose = notifyClosed;
     ws.onerror = notifyClosed;

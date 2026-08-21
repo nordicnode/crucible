@@ -43,6 +43,9 @@ enum ServerMsg {
     StateDiff(StateDiffMsg),
     CommandRejected(CommandRejectedMsg),
     MatchEnd(MatchEndMsg),
+    /// The server is at its concurrent-match capacity; the client should
+    /// return to the lobby rather than wait on a dead connection.
+    ServerBusy,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -61,6 +64,8 @@ struct StateDiffMsg {
     ore: i32,
     power_produced: i32,
     power_consumed: i32,
+    /// The player's currently researched upgrade ("None" before any research).
+    upgrade: String,
     entities: Vec<DiffEntity>,
     ore_tiles: Vec<OreTile>,
     visible: Vec<u16>,
@@ -144,23 +149,65 @@ async fn handle(socket: WebSocket, state: crate::AppState) {
     }
 }
 
-async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(
+    socket: WebSocket,
+    state: crate::AppState,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut sender, mut receiver) = socket.split();
 
-    // Wait for JoinMatch.
-    let opponent = loop {
-        match receiver.next().await {
-            Some(Ok(Message::Text(t))) => {
-                if let Ok(ClientMsg::JoinMatch { opponent }) = serde_json::from_str(&t) {
-                    break opponent;
+    // Wait for JoinMatch, with a deadline: a connection that never greets
+    // would otherwise squat on its socket (and file descriptor) forever.
+    let opponent = match tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match receiver.next().await {
+                Some(Ok(Message::Text(t))) => {
+                    if let Ok(ClientMsg::JoinMatch { opponent }) = serde_json::from_str(&t) {
+                        return Some(opponent);
+                    }
                 }
+                Some(Ok(Message::Close(_))) | None => return None,
+                _ => continue,
             }
-            Some(Ok(Message::Close(_))) | None => return Ok(()),
-            _ => continue,
+        }
+    })
+    .await
+    {
+        Ok(Some(opponent)) => opponent,
+        Ok(None) => return Ok(()), // client closed before joining
+        Err(_) => {
+            tracing::debug!("ws session timed out waiting for JoinMatch");
+            let _ = sender.send(Message::Close(None)).await;
+            return Ok(());
         }
     };
 
-    let mut bot: Box<dyn Bot> = resolve_opponent(state.store.as_ref(), &opponent);
+    // Cap concurrent live matches: every connection runs a full 10 Hz sim, so
+    // unbounded sessions would exhaust CPU if the server were ever exposed
+    // beyond localhost. A busy server tells the client instead of hanging.
+    let _match_permit = match state.live_matches.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            sender
+                .send(Message::Text(
+                    serde_json::to_string(&ServerMsg::ServerBusy)?.into(),
+                ))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    // Resolve the opponent off the async runtime: it reads the store (SQLite
+    // behind a mutex), which can stall live match handling if contended.
+    let store = state.store.clone();
+    let opponent_name = opponent.clone();
+    let mut bot: Box<dyn Bot> =
+        match tokio::task::spawn_blocking(move || resolve_opponent(&store, &opponent_name)).await {
+            Ok(bot) => bot,
+            Err(e) => {
+                tracing::error!("opponent resolution failed: {e}");
+                Box::new(hard())
+            }
+        };
 
     // Seed from the wall clock (server is the one place this is allowed); the
     // seed is recorded in the replay so the match stays reproducible.
@@ -212,92 +259,145 @@ async fn run(socket: WebSocket, state: crate::AppState) -> Result<(), Box<dyn st
     let mut pending: Vec<Command> = Vec::new();
     let mut last_event_tick = -1i32;
     let mut tick_interval = tokio::time::interval(Duration::from_millis(100));
+    // Delay (not the default Burst): if the loop ever falls behind, drop to
+    // the next 100ms boundary instead of running the sim in a burst. This
+    // keeps wall-clock pacing steady under load.
+    tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    tick_interval.tick().await; // consume the immediate first tick
 
-    loop {
-        // Drain buffered human commands.
-        while let Ok(cmds) = rx.try_recv() {
-            pending.extend(cmds);
-        }
-
-        // The AI opponent (P1) deliberates on the command-tick cadence
-        // (COMMAND_TICK = 20 sim ticks, i.e. every 2 s).
-        if game.is_command_tick() {
-            let bot_cmds = bot.decide(&game, Player::P1);
-            for c in &bot_cmds {
-                replay.record(game.tick, Player::P1, c.clone());
+    // Run the match. If the client disconnects (or a send fails) mid-match,
+    // the error surfaces here with the replay state intact, so the match is
+    // still persisted as a partial replay instead of being lost entirely.
+    let result = match (async {
+        loop {
+            // Drain buffered human commands.
+            while let Ok(cmds) = rx.try_recv() {
+                pending.extend(cmds);
             }
-            game.apply_commands(Player::P1, &bot_cmds);
-        }
 
-        // Human (P0) commands apply the tick they arrive — no waiting for the
-        // next command-tick boundary. Replays record the exact tick, and the
-        // replay re-runs (spectate shim, ghosts) apply commands at arbitrary
-        // ticks, so this stays byte-deterministic.
-        let human_cmds = std::mem::take(&mut pending);
-        for c in &human_cmds {
-            replay.record(game.tick, Player::P0, c.clone());
-        }
-        for (index, result) in game
-            .apply_commands(Player::P0, &human_cmds)
-            .into_iter()
-            .enumerate()
-        {
-            if let Err(reason) = result {
-                sender
-                    .send(Message::Text(
-                        serde_json::to_string(&ServerMsg::CommandRejected(CommandRejectedMsg {
-                            index,
-                            reason: reason.to_string(),
-                        }))?
-                        .into(),
-                    ))
-                    .await?;
+            // The AI opponent (P1) deliberates on the command-tick cadence
+            // (COMMAND_TICK = 20 sim ticks, i.e. every 2 s).
+            if game.is_command_tick() {
+                let bot_cmds = bot.decide(&game, Player::P1);
+                for c in &bot_cmds {
+                    replay.record(game.tick, Player::P1, c.clone());
+                }
+                game.apply_commands(Player::P1, &bot_cmds);
             }
+
+            // Human (P0) commands apply the tick they arrive — no waiting for
+            // the next command-tick boundary. Replays record the exact tick,
+            // and the replay re-runs (spectate shim, ghosts) apply commands at
+            // arbitrary ticks, so this stays byte-deterministic.
+            let human_cmds = std::mem::take(&mut pending);
+            for c in &human_cmds {
+                replay.record(game.tick, Player::P0, c.clone());
+            }
+            for (index, result) in game
+                .apply_commands(Player::P0, &human_cmds)
+                .into_iter()
+                .enumerate()
+            {
+                if let Err(reason) = result {
+                    sender
+                        .send(Message::Text(
+                            serde_json::to_string(&ServerMsg::CommandRejected(
+                                CommandRejectedMsg {
+                                    index,
+                                    reason: reason.to_string(),
+                                },
+                            ))?
+                            .into(),
+                        ))
+                        .await?;
+                }
+            }
+
+            game.step();
+
+            let diff = build_diff(&game, &mut last_event_tick);
+            sender
+                .send(Message::Text(serde_json::to_string(&diff)?.into()))
+                .await?;
+
+            if game.is_over() {
+                return Ok(ReplayResult {
+                    winner: game.winner,
+                    reason: game.win_reason,
+                    duration_ticks: game.tick,
+                });
+            }
+
+            tick_interval.tick().await;
         }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            // Client disconnected (or a send failed) mid-match: persist a
+            // partial replay so the match isn't lost, then propagate.
+            save_replay(&state, seed, &opponent, &game, &replay, None).await;
+            return Err(e);
+        }
+    };
 
-        game.step();
-
-        let diff = build_diff(&game, &mut last_event_tick);
-        sender
-            .send(Message::Text(serde_json::to_string(&diff)?.into()))
-            .await?;
-
-        if game.is_over() {
-            let result = ReplayResult {
-                winner: game.winner,
+    // Match ended normally: record the result, persist the replay, and tell
+    // the client. A failing final send (client already gone) is not fatal.
+    replay.result = Some(result.clone());
+    let replay_id = save_replay(&state, seed, &opponent, &game, &replay, Some(&result)).await;
+    let _ = sender
+        .send(Message::Text(
+            serde_json::to_string(&ServerMsg::MatchEnd(MatchEndMsg {
+                winner: game.winner.map(|p| p.index() as u8),
                 reason: game.win_reason,
                 duration_ticks: game.tick,
-            };
-            replay.result = Some(result);
-            let replay_id = state
-                .store
-                .save_match(
-                    seed,
-                    "human",
-                    &format!("bot:{opponent}"),
-                    &format!("{:?}", game.winner),
-                    game.tick,
-                    &replay.to_json(),
-                )
-                .ok();
-            sender
-                .send(Message::Text(
-                    serde_json::to_string(&ServerMsg::MatchEnd(MatchEndMsg {
-                        winner: game.winner.map(|p| p.index() as u8),
-                        reason: game.win_reason,
-                        duration_ticks: game.tick,
-                        replay_id,
-                    }))?
-                    .into(),
-                ))
-                .await?;
-            break;
-        }
-
-        tick_interval.tick().await;
-    }
-
+                replay_id,
+            }))?
+            .into(),
+        ))
+        .await;
     Ok(())
+}
+
+/// Persist a match's replay (finished or aborted by a disconnect) off the
+/// async runtime so the store mutex never stalls the match loop. Failures are
+/// logged, never fatal.
+async fn save_replay(
+    state: &crate::AppState,
+    seed: u64,
+    opponent: &str,
+    game: &Game,
+    replay: &Replay,
+    result: Option<&ReplayResult>,
+) -> Option<i64> {
+    let mut final_replay = replay.clone();
+    final_replay.result = result.cloned();
+    let store = state.store.clone();
+    let p1_type = format!("bot:{opponent}");
+    // Canonical result label ("P0"/"P1"/"draw"; "abandoned" when the client
+    // disconnected mid-match). The ghost pool keys off these exact strings.
+    let result_str = match result {
+        Some(r) => crate::store::result_label(r.winner),
+        None => "abandoned".to_string(),
+    };
+    let duration_ticks = game.tick;
+    let json = final_replay.to_json();
+    match tokio::task::spawn_blocking(move || {
+        store.save_match(seed, "human", &p1_type, &result_str, duration_ticks, &json)
+    })
+    .await
+    {
+        Ok(Ok(id)) => Some(id),
+        Ok(Err(e)) => {
+            tracing::error!("failed to save match replay: {e}");
+            None
+        }
+        Err(e) => {
+            tracing::error!("replay save task failed: {e}");
+            None
+        }
+    }
 }
 
 fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
@@ -426,6 +526,7 @@ fn build_diff(game: &Game, last_event_tick: &mut i32) -> ServerMsg {
         ore: game.ore[0],
         power_produced,
         power_consumed,
+        upgrade: format!("{:?}", game.upgrades[0]),
         entities,
         ore_tiles,
         visible,
@@ -451,14 +552,18 @@ fn command_batch_is_bounded(cmds: &[Command]) -> bool {
     }
     let mut total_unit_ids = 0usize;
     for cmd in cmds {
-        if let Command::MoveGroup { units, .. } = cmd {
-            if units.len() > MAX_MOVE_GROUP_UNITS {
-                return false;
-            }
-            total_unit_ids += units.len();
-            if total_unit_ids > MAX_MOVE_GROUP_UNITS_PER_BATCH {
-                return false;
-            }
+        // `Attack` carries a unit group too — bound it identically so a
+        // malformed batch can't smuggle an oversized id list past the cap.
+        let unit_ids = match cmd {
+            Command::MoveGroup { units, .. } | Command::Attack { units, .. } => units,
+            _ => continue,
+        };
+        if unit_ids.len() > MAX_MOVE_GROUP_UNITS {
+            return false;
+        }
+        total_unit_ids += unit_ids.len();
+        if total_unit_ids > MAX_MOVE_GROUP_UNITS_PER_BATCH {
+            return false;
         }
     }
     true
@@ -530,7 +635,12 @@ fn resolve_opponent(store: &Store, opponent: &str) -> Box<dyn Bot> {
 
     if let Some(id) = genome_id {
         if let Ok(Some(weights)) = store.get_genome_weights(id) {
-            return Box::new(GenomeBot::new(weights));
+            // Guard against stale genomes persisted under an older network
+            // shape (e.g. before the build head grew): a wrong-length genome
+            // would panic the forward pass, so fall back to the hard bot.
+            if weights.len() == crucible_ai::GENOME_LEN {
+                return Box::new(GenomeBot::new(weights));
+            }
         }
     }
 
@@ -538,13 +648,17 @@ fn resolve_opponent(store: &Store, opponent: &str) -> Box<dyn Bot> {
     Box::new(hard())
 }
 
-/// Optional timeout override for tests/smoke runs (`CRUCIBLE_TIMEOUT_TICKS`).
+/// Live matches have **no time limit** (`timeout_ticks: 0`). Set
+/// `CRUCIBLE_TIMEOUT_TICKS` to re-introduce a cap for smoke tests and
+/// automated play.
 fn timeout_override(mut config: GameConfig) -> GameConfig {
     if let Ok(v) = std::env::var("CRUCIBLE_TIMEOUT_TICKS") {
         if let Ok(ticks) = v.parse::<i32>() {
             config.timeout_ticks = ticks;
+            return config;
         }
     }
+    config.timeout_ticks = 0; // unlimited
     config
 }
 
@@ -570,6 +684,21 @@ mod tests {
             stance: Stance::Aggressive,
         };
         assert!(command_batch_is_bounded(&[small_move]));
+
+        // The Attack command carries a unit group too and must be bounded
+        // identically (a malformed batch must not smuggle ids past the cap).
+        let oversized_attack = Command::Attack {
+            player: Player::P0,
+            units: vec![1; MAX_MOVE_GROUP_UNITS + 1],
+            target: 9,
+        };
+        assert!(!command_batch_is_bounded(&[oversized_attack]));
+        let small_attack = Command::Attack {
+            player: Player::P0,
+            units: vec![1, 2],
+            target: 9,
+        };
+        assert!(command_batch_is_bounded(&[small_attack]));
     }
 
     #[test]
@@ -616,9 +745,10 @@ mod tests {
     #[test]
     fn resolve_opponent_champion_and_museum() {
         let store = Store::in_memory().unwrap();
-        let weights = vec![0.1_f32, -0.2, 0.3];
+        // A real genome (correct length for the current network shape).
+        let weights = crucible_ai::init(&mut crucible_sim::Rng::from_seed(7));
         let id = store.save_genome(3, None, "init", &weights).unwrap();
-        store.crown_champion(id, 3, None).unwrap();
+        store.crown_champion(id, 3, None, None).unwrap();
 
         assert_eq!(resolve_opponent(&store, "champion").name(), "genome");
         assert_eq!(
@@ -627,6 +757,15 @@ mod tests {
         );
         // A museum id with no stored genome falls back to hard.
         assert_eq!(resolve_opponent(&store, "museum:9999").name(), "hard");
+        // A stale genome under an older network shape also falls back to hard
+        // instead of panicking the forward pass.
+        let stale = store
+            .save_genome(4, None, "init", &[0.1_f32, -0.2, 0.3])
+            .unwrap();
+        assert_eq!(
+            resolve_opponent(&store, &format!("museum:{stale}")).name(),
+            "hard"
+        );
     }
 
     #[test]
@@ -634,7 +773,7 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let genome = crucible_ai::init(&mut crucible_sim::Rng::from_seed(7));
         let id = store.save_genome(0, None, "init", &genome).unwrap();
-        store.crown_champion(id, 0, None).unwrap();
+        store.crown_champion(id, 0, None, None).unwrap();
 
         let mut champ = resolve_opponent(&store, "champion");
         assert_eq!(champ.name(), "genome");

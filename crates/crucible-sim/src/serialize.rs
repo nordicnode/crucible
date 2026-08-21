@@ -10,7 +10,7 @@ use crate::entity::Player;
 use crate::game::{Game, GameConfig, WinReason};
 use crate::orders::Command;
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// A command stamped with the tick at which it was issued.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]

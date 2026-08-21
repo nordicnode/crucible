@@ -6,15 +6,25 @@
 //! entities — that is enforced by construction, and a fuzz test asserts it.
 
 use crucible_sim::{
-    fixed::MATCH_TIMEOUT_TICKS, fog::FogView, unit_stats, BuildingType, Game, Player, UnitType,
-    Upgrade,
+    fixed::MATCH_TIMEOUT_TICKS, fog::FogView, map::MAP_TILES, unit_stats, BuildingType, Game,
+    Player, UnitType, Upgrade,
 };
 
 /// Time window (ticks) over which remembered enemy sightings decay to zero.
 pub const DECAY_TICKS: i32 = 300; // 30 seconds
 
-/// The fixed feature-vector dimension.
-pub const FEATURE_DIM: usize = 104;
+/// How many command ticks of observations are stacked into the network input
+/// (plan §5.2 history embedding): the current features plus the previous
+/// `HISTORY_TICKS - 1` command ticks, so the network can read trends instead
+/// of only the instantaneous state. Implemented as last-K features (plan §12
+/// alternative) to keep the MLP feed-forward.
+pub const HISTORY_TICKS: usize = 2;
+
+/// One command tick's worth of features (fog-legal, see the layout below).
+pub const SINGLE_FEATURE_DIM: usize = 112;
+
+/// The stacked network input dimension: `HISTORY_TICKS × SINGLE_FEATURE_DIM`.
+pub const FEATURE_DIM: usize = SINGLE_FEATURE_DIM * HISTORY_TICKS;
 
 /// An own building as seen by the feature extractor.
 #[derive(Clone, Debug)]
@@ -105,19 +115,29 @@ fn count_buildings(input: &FeatureInput, bt: BuildingType) -> usize {
 /// [11..15] observed enemy units (decayed): infantry, tank, artillery, harvester
 /// [15..21] observed enemy buildings (decayed): hq, refinery, factory, barracks, techlab, turret
 /// [21..85] enemy building presence per 8x8 sector (64), decayed, capped
-/// [85]  unexplored fraction
-/// [86]  reserved (0)
-/// [87]  reserved (0)
+/// [85]  unexplored fraction (1 - explored tiles / total)
+/// [86]  own airfields / 2
+/// [87]  observed enemy airfields (decayed) / 2
 /// [88]  game time / timeout
 /// [89]  own HQ HP fraction
 /// [90]  factory queue / 8
 /// [91]  barracks queue / 8
 /// [92]  idle production buildings / 8
-/// [93..96] upgrade one-hot: none, damage, hp
-/// [96..104] reserved (0)
+/// [93..95] upgrade one-hot: none, damage, hp
+/// [96]  observed enemy aircraft (decayed) / 8
+/// [97]  own gunships / 8
+/// [98]  own interceptors / 8
+/// [99]  own radar / 2
+/// [100] own tesla coils / 4
+/// [101] own mammoth tanks / 6
+/// [102] observed enemy radar (decayed) / 2
+/// [103] observed enemy tesla coils (decayed) / 4
+/// [104] observed enemy mammoth tanks (decayed) / 6
+/// [105] range upgrade one-hot
+/// [106..111] reserved (0)
 /// ```
-pub fn extract(input: &FeatureInput) -> Vec<f32> {
-    let mut f = vec![0.0f32; FEATURE_DIM];
+pub fn extract_single(input: &FeatureInput) -> Vec<f32> {
+    let mut f = vec![0.0f32; SINGLE_FEATURE_DIM];
     let tick = input.tick;
 
     f[0] = clamp01(input.ore as f32 / 2000.0);
@@ -132,6 +152,14 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
     f[7] = clamp01(count_own(input, UnitType::Infantry) as f32 / 16.0);
     f[8] = clamp01(count_own(input, UnitType::Tank) as f32 / 16.0);
     f[9] = clamp01(count_own(input, UnitType::Artillery) as f32 / 16.0);
+    // Own aircraft counts (the network can see its airfields but needs to
+    // know how many birds it actually has to coordinate raids).
+    f[97] = clamp01(count_own(input, UnitType::Gunship) as f32 / 8.0);
+    f[98] = clamp01(count_own(input, UnitType::Interceptor) as f32 / 8.0);
+    // Second-tier presence: radar dishes, tesla coils, and mammoth tanks.
+    f[99] = clamp01(count_buildings(input, BuildingType::Radar) as f32 / 2.0);
+    f[100] = clamp01(count_buildings(input, BuildingType::TeslaCoil) as f32 / 4.0);
+    f[101] = clamp01(count_own(input, UnitType::MammothTank) as f32 / 6.0);
 
     let army_value: i32 = input.own_units.iter().map(|&u| unit_stats(u).cost).sum();
     f[10] = clamp01(army_value as f32 / 2000.0);
@@ -144,8 +172,19 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
             UnitType::Tank => 12,
             UnitType::Artillery => 13,
             UnitType::Harvester => 14,
+            UnitType::Gunship | UnitType::Interceptor => 15,
+            UnitType::MammothTank => 104,
         };
-        f[idx] = clamp01(f[idx] + w / 16.0);
+        // Aircraft decay into the reserved enemy-building airfield slot's
+        // companion (index 96), mammoth tanks into index 104, and everything
+        // else into the ground-unit slots.
+        if idx == 15 {
+            f[96] = clamp01(f[96] + w / 8.0);
+        } else if idx == 104 {
+            f[104] = clamp01(f[104] + w / 6.0);
+        } else {
+            f[idx] = clamp01(f[idx] + w / 16.0);
+        }
     }
 
     // Observed enemy buildings (decayed).
@@ -158,8 +197,26 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
             BuildingType::Barracks => 18,
             BuildingType::TechLab | BuildingType::Airfield => 19,
             BuildingType::Turret => 20,
+            BuildingType::Radar => 102,
+            BuildingType::TeslaCoil => 103,
         };
-        f[idx] = clamp01(f[idx] + w / 4.0);
+        // Radar / TeslaCoil get their own normalized slots; the rest share the
+        // generic building-count features.
+        if idx == 102 {
+            f[102] = clamp01(f[102] + w / 2.0);
+        } else if idx == 103 {
+            f[103] = clamp01(f[103] + w / 4.0);
+        } else {
+            f[idx] = clamp01(f[idx] + w / 4.0);
+        }
+    }
+
+    // Observed enemy airfields (decayed), separately normalized.
+    for m in &input.fog.buildings {
+        if m.btype == BuildingType::Airfield {
+            let w = decay(tick, m.last_seen);
+            f[87] = clamp01(f[87] + w / 2.0);
+        }
     }
 
     // Enemy building presence per 8x8 sector (oriented relative to own HQ corner).
@@ -177,9 +234,13 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
         f[21 + sy * 8 + sx] = clamp01(f[21 + sy * 8 + sx] + w);
     }
 
-    // [85] reserved: full explored-tile tracking lives in the sim's fog memory
-    // and is deferred; hold a neutral value so the input shape stays fixed.
-    f[85] = 0.5;
+    // Unexplored fraction: the fog memory tracks every tile ever seen, so the
+    // commander knows how much of the battlefield remains to be scouted.
+    let explored = input.fog.explored.iter().filter(|&&e| e).count();
+    f[85] = 1.0 - explored as f32 / MAP_TILES as f32;
+
+    // Own airfield count (the network can see when air power is available).
+    f[86] = clamp01(count_buildings(input, BuildingType::Airfield) as f32 / 2.0);
 
     f[88] = clamp01(tick as f32 / MATCH_TIMEOUT_TICKS as f32);
 
@@ -202,8 +263,10 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
             BuildingType::Barracks => barracks_q += b.queue_len,
             _ => {}
         }
-        if (b.btype == BuildingType::Factory || b.btype == BuildingType::Barracks)
-            && b.queue_len == 0
+        if matches!(
+            b.btype,
+            BuildingType::Factory | BuildingType::Barracks | BuildingType::Airfield
+        ) && b.queue_len == 0
         {
             idle += 1;
         }
@@ -217,8 +280,28 @@ pub fn extract(input: &FeatureInput) -> Vec<f32> {
         Upgrade::None => f[93] = 1.0,
         Upgrade::Damage => f[94] = 1.0,
         Upgrade::Hp => f[95] = 1.0,
+        Upgrade::Range => f[105] = 1.0,
     }
 
+    f
+}
+
+/// Stack the history embedding: the previous command ticks' single-tick
+/// vectors (oldest first, at most `HISTORY_TICKS - 1` of them) followed by
+/// the current one. A missing history is zero-padded, so the first command
+/// ticks of a match still produce a full-size input — the network can learn
+/// that an all-zero previous observation means "start of match".
+///
+/// The history is itself fog-legal by construction: it is derived from
+/// previous [`FeatureInput`]s, so stacking it cannot leak hidden state.
+pub fn extract(input: &FeatureInput, history: &[Vec<f32>]) -> Vec<f32> {
+    let mut f: Vec<f32> = Vec::with_capacity(FEATURE_DIM);
+    for prev in history.iter().take(HISTORY_TICKS - 1) {
+        f.extend_from_slice(prev);
+    }
+    let prev_dim = (HISTORY_TICKS - 1) * SINGLE_FEATURE_DIM;
+    f.resize(prev_dim, 0.0);
+    f.extend(extract_single(input));
     f
 }
 
@@ -232,9 +315,35 @@ mod tests {
         let mut g = Game::new(Map::generate(1), GameConfig::default());
         g.step();
         let input = FeatureInput::from_game(&g, Player::P0);
-        let f = extract(&input);
+        let f = extract(&input, &[]);
         assert_eq!(f.len(), FEATURE_DIM);
-        assert_eq!(f.len(), 104);
+        assert_eq!(f.len(), 224);
+        assert_eq!(extract_single(&input).len(), 112);
+    }
+
+    #[test]
+    fn history_stacks_previous_observations() {
+        let mut g = Game::new(Map::generate(1), GameConfig::default());
+        g.step();
+        let input = FeatureInput::from_game(&g, Player::P0);
+        let single = extract_single(&input);
+
+        // No history: the previous slots are zero-padded.
+        let no_hist = extract(&input, &[]);
+        assert_eq!(no_hist.len(), 224);
+        assert!(no_hist[..112].iter().all(|&v| v == 0.0));
+        assert_eq!(&no_hist[112..], &single[..]);
+
+        // One previous tick: it fills the first 112 slots verbatim.
+        let hist = extract(&input, std::slice::from_ref(&single));
+        assert_eq!(&hist[..112], &single[..]);
+        assert_eq!(&hist[112..], &single[..]);
+
+        // A longer history is trimmed to the oldest-first window.
+        let two = vec![vec![1.0f32; 112], single.clone()];
+        let trimmed = extract(&input, &two);
+        assert_eq!(&trimmed[..112], &two[0][..]);
+        assert_eq!(&trimmed[112..], &single[..]);
     }
 
     #[test]
@@ -243,7 +352,7 @@ mod tests {
         for _ in 0..50 {
             g.step();
         }
-        let f = extract(&FeatureInput::from_game(&g, Player::P0));
+        let f = extract(&FeatureInput::from_game(&g, Player::P0), &[]);
         for v in &f {
             assert!(v.is_finite());
             assert!((0.0..=1.0).contains(v));

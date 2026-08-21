@@ -1,5 +1,8 @@
-// Dashboard + museum: read the REST endpoints and render champion, Elo
-// sparkline, training stats, museum list, and the away report. Read-only.
+// Dashboard: read the REST endpoints and render champion, Elo sparkline,
+// training stats, and the away report. The museum archive lives on its own
+// paginated page (museum.ts); the dashboard links to it. Read-only.
+
+import { museum } from "./museum";
 
 export interface ChampionPayload {
   id: number;
@@ -9,6 +12,7 @@ export interface ChampionPayload {
   dethroned_at: number | null;
   reigning: boolean;
   gauntlet_record: unknown;
+  era: string | null;
   elo: number | null;
 }
 
@@ -49,6 +53,7 @@ export function hide(): void {
 async function show(): Promise<void> {
   document.getElementById("lobby")?.classList.add("hidden");
   document.getElementById("result")?.classList.add("hidden");
+  document.getElementById("museum")?.classList.add("hidden");
   const dash = document.getElementById("dashboard");
   dash?.classList.remove("hidden");
   document.getElementById("overlay")?.classList.remove("hidden");
@@ -59,14 +64,14 @@ async function show(): Promise<void> {
       get<any>("/api/status"),
       get<{ champion: ChampionPayload | null }>("/api/champion"),
       get<{ stats: TrainingStat[] }>("/api/training-stats"),
-      get<{ champions: ChampionPayload[] }>("/api/museum"),
+      get<{ champions: ChampionPayload[]; total: number }>("/api/museum"),
       get<{ points: EloPoint[] }>("/api/elo-history"),
     ]);
 
     renderChampion(champion.champion);
     renderElo(eloHist.points);
     renderStats(status, stats.stats);
-    renderMuseum(museum.champions);
+    renderMuseum(museum.total);
     renderEvents(status.recent_events ?? []);
     setText("dash-status", "");
   } catch (e) {
@@ -87,6 +92,7 @@ function renderChampion(c: ChampionPayload | null): void {
       <strong>Champion #${c.genome_id}</strong>
       <span>generation ${c.generation}</span>
       <span>Elo ${elo}</span>
+      ${c.era ? `<span>${c.era}</span>` : ""}
       <span class="muted">crowned ${new Date(c.crowned_at * 1000).toLocaleString()}</span>
     </div>`;
 }
@@ -138,22 +144,18 @@ function renderStats(status: any, stats: TrainingStat[]): void {
       : ""}`;
 }
 
-function renderMuseum(champions: ChampionPayload[]): void {
+function renderMuseum(total: number): void {
   const elt = document.getElementById("dash-museum");
   if (!elt) return;
-  if (champions.length === 0) {
-    elt.innerHTML = "<div class=\"muted\">Museum is empty.</div>";
-    return;
-  }
-  const rows = [...champions].reverse().slice(0, 12).map((c) => {
-    const elo = c.elo == null ? "—" : String(Math.round(c.elo));
-    const badge = c.reigning ? "👑 reigning" : "dethroned";
-    return `<tr><td>#${c.genome_id}</td><td>gen ${c.generation}</td><td>Elo ${elo}</td><td>${badge}</td></tr>`;
-  });
+  // The archive has its own paginated page; the dashboard just links to it.
+  const noun = total === 1 ? "champion" : "champions";
   elt.innerHTML = `
-    <h2>Museum</h2>
-    <table><thead><tr><th>genome</th><th>gen</th><th>elo</th><th></th></tr></thead>
-    <tbody>${rows.join("")}</tbody></table>`;
+    <h2>Museum Archive</h2>
+    <div class="muted" style="margin-bottom:8px;">${total} ${noun} ever crowned — eras, Elo, reign lengths, and gauntlet records.</div>
+    <button class="btn" id="dash-open-museum">Open the Museum Archive →</button>`;
+  document.getElementById("dash-open-museum")?.addEventListener("click", () => {
+    void museum.open();
+  });
 }
 
 function renderEvents(events: Array<{ kind: string; payload: any; at: number }>): void {

@@ -18,7 +18,7 @@ pub mod scripted;
 pub use bot::Bot;
 pub use commander::GenomeBot;
 pub use decision::decide;
-pub use features::{extract, FeatureInput, FEATURE_DIM};
+pub use features::{extract, extract_single, FeatureInput, FEATURE_DIM};
 pub use headless::{
     run_match, run_match_detailed, run_match_with_replay, series, DetailedOutcome, MatchOutcome,
     SeriesReport,

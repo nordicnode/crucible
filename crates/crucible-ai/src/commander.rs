@@ -6,16 +6,24 @@ use crucible_sim::{Command, Game, Player};
 
 use crate::bot::Bot;
 use crate::decision::decide;
-use crate::features::FeatureInput;
+use crate::features::{extract_single, FeatureInput, HISTORY_TICKS};
 
 /// A genome playing as a commander.
 pub struct GenomeBot {
     pub genome: Vec<f32>,
+    /// The history embedding (plan §5.2): this commander's previous command
+    /// ticks' feature vectors, oldest first, at most `HISTORY_TICKS - 1`.
+    /// Empty at the start of a match — the extractor zero-pads it, so the
+    /// network sees an all-zero "start of match" previous observation.
+    history: Vec<Vec<f32>>,
 }
 
 impl GenomeBot {
     pub fn new(genome: Vec<f32>) -> Self {
-        GenomeBot { genome }
+        GenomeBot {
+            genome,
+            history: Vec::new(),
+        }
     }
 }
 
@@ -26,6 +34,12 @@ impl Bot for GenomeBot {
 
     fn decide(&mut self, game: &Game, player: Player) -> Vec<Command> {
         let input = FeatureInput::from_game(game, player);
-        decide(game, player, &self.genome, &input)
+        let cmds = decide(game, player, &self.genome, &input, &self.history);
+        // Record this tick's observation for the next decision.
+        self.history.push(extract_single(&input));
+        while self.history.len() >= HISTORY_TICKS {
+            self.history.remove(0);
+        }
+        cmds
     }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { placeBuilding, repair, sell, trainUnit, type Command } from "./types";
+import { attack, placeBuilding, repair, sell, trainUnit, type Command } from "./types";
 
 // The server deserializes commands with serde: `Player` is a fieldless enum,
 // so `player` must be the variant name string ("P0"), NOT an index (0).
@@ -38,5 +38,12 @@ describe("command wire format", () => {
   it("serializes Sell and Repair commands", () => {
     expect(JSON.stringify(sell(3))).toBe('{"Sell":{"player":"P0","building":3}}');
     expect(JSON.stringify(repair(3))).toBe('{"Repair":{"player":"P0","building":3}}');
+  });
+
+  it("serializes Attack with the target entity id", () => {
+    const cmd: Command = attack([7, 8], 42);
+    expect(JSON.stringify(cmd)).toBe(
+      '{"Attack":{"player":"P0","units":[7,8],"target":42}}',
+    );
   });
 });
