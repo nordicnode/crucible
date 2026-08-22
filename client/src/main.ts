@@ -1,6 +1,10 @@
 // Client entry point: lobby, match loop, input, combat FX, and Command Sidebar.
 // All simulation rules are server-side; this renders tactical state and forwards commands.
 
+import "@fontsource/share-tech-mono";
+import "@fontsource/chakra-petch/500.css";
+import "@fontsource/chakra-petch/700.css";
+
 import { initDashboard } from "./dashboard";
 import { museum } from "./museum";
 import { fx } from "./fx";

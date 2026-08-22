@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { fx } from "./fx";
+import { drawHealthBar, drawSelectionReticle } from "./hud";
 import { Camera } from "./renderer";
 import {
   drawBuildingSprite,
-  drawHealthBar,
   drawImpassableTile,
   drawOreDeposit,
   drawPassableTile,
   drawRallyPoint,
-  drawSelectionReticle,
   drawTacticalIcon,
   drawUnitSprite,
   getCursorDataUrl,

@@ -350,6 +350,24 @@ export class FXEngine {
         alpha: isSmoke ? 0.85 : 1,
       });
     }
+
+    // Tumbling armor debris hurled outward by the blast
+    const debrisCount = kind === "building" ? 7 : kind === "heavy" ? 4 : 2;
+    for (let i = 0; i < debrisCount; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const spd = 3 + Math.random() * 5;
+      this.particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * spd,
+        vy: Math.sin(a) * spd - 1.2,
+        life: 0.35 + Math.random() * 0.3,
+        maxLife: 0.65,
+        size: 2 + Math.random() * 2,
+        color: Math.random() < 0.5 ? "#18181b" : "#3f3f46",
+        alpha: 1,
+      });
+    }
   }
 
   /** Spawn unit death effect */
@@ -525,9 +543,26 @@ export class FXEngine {
       const sy = cam.screenY(curY - arcOffset);
 
       if (p.kind === "laser") {
-        // High-energy laser beam
+        // High-energy laser beam: soft halo over a white-hot core
+        ctx.save();
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(cam.screenX(p.fromX), cam.screenY(p.fromY));
+        ctx.lineTo(cam.screenX(p.toX), cam.screenY(p.toY));
+        ctx.stroke();
+        ctx.restore();
+
         ctx.strokeStyle = p.color;
         ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cam.screenX(p.fromX), cam.screenY(p.fromY));
+        ctx.lineTo(cam.screenX(p.toX), cam.screenY(p.toY));
+        ctx.stroke();
+
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(cam.screenX(p.fromX), cam.screenY(p.fromY));
         ctx.lineTo(cam.screenX(p.toX), cam.screenY(p.toY));
@@ -545,13 +580,24 @@ export class FXEngine {
         ctx.fillStyle = "#facc15";
         ctx.fillRect(sx - 2, sy - 2, 4, 4);
       } else {
-        // High-speed kinetic tracer shell streak
+        // High-speed kinetic tracer shell streak with a soft energy glow
         const tailProgress = Math.max(0, p.progress - 0.12);
         const tailX = p.fromX + (p.toX - p.fromX) * tailProgress;
         const tailY = p.fromY + (p.toY - p.fromY) * tailProgress;
 
+        const coreW = p.kind === "shell" ? 2 : 1.2;
+        ctx.save();
+        ctx.globalAlpha = 0.35;
         ctx.strokeStyle = p.color;
-        ctx.lineWidth = p.kind === "shell" ? 2 : 1.2;
+        ctx.lineWidth = coreW * 3;
+        ctx.beginPath();
+        ctx.moveTo(cam.screenX(tailX), cam.screenY(tailY));
+        ctx.lineTo(sx, sy);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = coreW;
         ctx.beginPath();
         ctx.moveTo(cam.screenX(tailX), cam.screenY(tailY));
         ctx.lineTo(sx, sy);
@@ -568,6 +614,16 @@ export class FXEngine {
 
       ctx.save();
       ctx.translate(sx, sy);
+
+      // Expanding concussive shockwave ring ahead of the fireball
+      if (frac < 0.55) {
+        const ringR = maxPx * (0.5 + frac * 1.9);
+        ctx.strokeStyle = `rgba(253, 230, 138, ${(1 - frac / 0.55) * 0.65})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+      }
 
       if (frac < 0.35) {
         // Initial brilliant white-hot blast flash

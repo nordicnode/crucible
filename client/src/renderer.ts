@@ -3,13 +3,12 @@
 // blocky combat FX, and a compact tactical minimap.
 
 import { fx } from "./fx";
+import { drawHealthBar, drawSelectionReticle } from "./hud";
 import {
   drawBuildingSprite,
-  drawHealthBar,
   drawImpassableTile,
   drawOreDeposit,
   drawPassableTile,
-  drawSelectionReticle,
   drawUnitSprite,
 } from "./sprites";
 import { BUILDING_KINDS, BUILD_COSTS, UNIT_KINDS } from "./types";
@@ -174,7 +173,14 @@ export class Renderer {
         const isPassable = world.passable[idx] ?? true;
 
         if (isPassable) {
-          drawPassableTile(ctx, tx, ty, px, py, size, !isVis);
+          // Rock-adjacency lets the tile draw its own contact shadow where
+          // formations meet soil — grounds the world visually.
+          drawPassableTile(ctx, tx, ty, px, py, size, !isVis, {
+            n: !(world.passable[idx - MAP] ?? true),
+            s: !(world.passable[idx + MAP] ?? true),
+            w: tx > 0 ? !(world.passable[idx - 1] ?? true) : false,
+            e: tx < MAP - 1 ? !(world.passable[idx + 1] ?? true) : false,
+          });
         } else {
           drawImpassableTile(ctx, tx, ty, px, py, size, !isVis);
         }
@@ -260,6 +266,26 @@ export class Renderer {
       const isMoving = world.isMoving(e.id);
       drawUnitSprite(ctx, e.kind, px, py, z, e.owner, heading, world.tick, isStale, 0, firingAge, isMoving);
     } else {
+      // Battle damage: heavily damaged structures vent smoke and embers.
+      if (
+        e.hp > 0 &&
+        e.hp < e.maxHp * 0.5 &&
+        (world.tick + e.id) % 5 === 0 &&
+        !isStale
+      ) {
+        const hurt = 1 - e.hp / Math.max(1, e.maxHp);
+        fx.particles.push({
+          x: p.x + (Math.random() - 0.5) * 0.35,
+          y: p.y - 0.25 - Math.random() * 0.2,
+          vx: (Math.random() - 0.5) * 0.3,
+          vy: -0.7 - Math.random() * 0.6,
+          life: 0.8 + Math.random() * 0.5,
+          maxLife: 1.3,
+          size: 3 + hurt * 2,
+          color: Math.random() < 0.75 ? "#1c1c20" : "#c2410c",
+          alpha: 0.75,
+        });
+      }
       drawBuildingSprite(
         ctx,
         e.kind,

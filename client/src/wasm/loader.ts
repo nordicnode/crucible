@@ -1,6 +1,7 @@
-// Loader for the generated wasm-bindgen shim. The bindings
-// (crucible_client_wasm.js / _bg.wasm / .d.ts) are produced by
-// `scripts/build-wasm.sh` and are NOT committed — run `npm run wasm` first.
+// Loader for the wasm replay engine. A committed pure-JS fallback module
+// (crucible_client_wasm.js, see its header) keeps Vite/tsc green without a
+// Rust toolchain; its replay calls throw a clear error until a real build
+// (`npm run wasm`) overwrites it with the generated wasm-bindgen bindings.
 // This module is imported lazily so the main bundle never pulls the wasm in
 // until spectate/replay is actually used.
 

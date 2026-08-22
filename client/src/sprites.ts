@@ -10,20 +10,23 @@ export interface TeamPalette {
   glow: string;
 }
 
+// Team hues are desaturated military steel-blue / oxide-red so saturated
+// armor plates sit naturally inside the muted olive-slate battlefield while
+// staying instantly readable against it.
 export const TEAM_BLUE: TeamPalette = {
-  primary: "#1d4ed8",
-  primaryLight: "#3b82f6",
-  primaryDark: "#1e3a8a",
-  accent: "#93c5fd",
-  glow: "rgba(59, 130, 246, 0.6)",
+  primary: "#2b6a9e",
+  primaryLight: "#4d8fc4",
+  primaryDark: "#1a3f61",
+  accent: "#a8cbe4",
+  glow: "rgba(77, 143, 196, 0.55)",
 };
 
 export const TEAM_RED: TeamPalette = {
-  primary: "#b91c1c",
-  primaryLight: "#ef4444",
-  primaryDark: "#7f1d1d",
-  accent: "#fca5a5",
-  glow: "rgba(239, 68, 68, 0.6)",
+  primary: "#a84a3a",
+  primaryLight: "#cc6b52",
+  primaryDark: "#5f271f",
+  accent: "#e4a58f",
+  glow: "rgba(204, 107, 82, 0.5)",
 };
 
 export const TEAM_STALE: TeamPalette = {
@@ -43,6 +46,42 @@ function tileHash(tx: number, ty: number): number {
   let h = (tx * 374761393 + ty * 668265263) ^ 0x5bf03635;
   h = (h ^ (h >> 13)) * 1274126143;
   return (h ^ (h >> 16)) >>> 0;
+}
+
+/** Smooth value noise in [0,1] — gives terrain coherent macro variation
+ *  (large light/dark patches) instead of uniform per-tile randomness. */
+function hash01(ix: number, iy: number): number {
+  return tileHash(ix, iy) / 4294967295;
+}
+
+function vnoise(x: number, y: number): number {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const sfx = x - x0;
+  const sfy = y - y0;
+  const ux = sfx * sfx * (3 - 2 * sfx);
+  const uy = sfy * sfy * (3 - 2 * sfy);
+  const a = hash01(x0, y0);
+  const b = hash01(x0 + 1, y0);
+  const c = hash01(x0, y0 + 1);
+  const d = hash01(x0 + 1, y0 + 1);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+/** Linear blend of two #rrggbb colors; t in [0,1]. */
+function mixColor(aHex: string, bHex: string, t: number): string {
+  const pa = parseInt(aHex.slice(1), 16);
+  const pb = parseInt(bHex.slice(1), 16);
+  const ar = (pa >> 16) & 255;
+  const ag = (pa >> 8) & 255;
+  const ab = pa & 255;
+  const br = (pb >> 16) & 255;
+  const bg = (pb >> 8) & 255;
+  const bb = pb & 255;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const b = Math.round(ab + (bb - ab) * t);
+  return `rgb(${r},${g},${b})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +129,13 @@ function pHazard(ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
 // Terrain Sprites (Tactical C&C Pixel Soil & Fractured Rock Outcroppings)
 // ---------------------------------------------------------------------------
 
+export interface TileRockEdges {
+  n: boolean;
+  e: boolean;
+  s: boolean;
+  w: boolean;
+}
+
 export function drawPassableTile(
   ctx: CanvasRenderingContext2D,
   tx: number,
@@ -98,35 +144,72 @@ export function drawPassableTile(
   py: number,
   size: number,
   isExploredOnly: boolean,
+  rock?: TileRockEdges,
 ): void {
   const h = tileHash(tx, ty);
-  const variant = h % 4;
+  const variant = h % 5;
 
   if (isExploredOnly) {
-    pRect(ctx, px, py, size, size, "#090d0b");
-    pStroke(ctx, px, py, size, size, "#040705");
+    // Remembered terrain: deeply dimmed but textured, so fog-of-war memory
+    // reads as known ground rather than empty void.
+    pRect(ctx, px, py, size, size, "#0a100c");
+    const patch = (h >> 5) % 3;
+    if (patch === 1) pRect(ctx, px, py, Math.ceil(size / 2), Math.ceil(size / 2), "#0c120e");
+    if (patch === 2) pRect(ctx, px + Math.floor(size / 2), py + Math.floor(size / 2), Math.ceil(size / 2), Math.ceil(size / 2), "#0c140f");
+    pStroke(ctx, px, py, size, size, "#050805");
     return;
   }
 
-  // Gritty tactical C&C earth palette
-  const groundBases = ["#1b2d1d", "#1e3221", "#18281a", "#213624"];
-  pRect(ctx, px, py, size, size, groundBases[variant]);
+  // Macro tonal patches (coherent ~6-tile waves) stop the ground from
+  // reading as a flat checkerboard of identical cells.
+  const macro = vnoise(tx * 0.17 + 41, ty * 0.17 + 97);
+  pRect(ctx, px, py, size, size, mixColor("#16241a", "#283b21", macro));
 
-  // Subtle 1px grid seam
-  pStroke(ctx, px, py, size, size, "#101d12");
+  // Subtle 1px cell seam
+  pStroke(ctx, px, py, size, size, "#0f1a11");
 
-  // Surface texture details (cracked soil, gravel clusters, tech seams)
+  // Surface texture details (gravel, dry tufts, cracked earth, debris)
   if (size >= 8) {
-    if (variant === 1) {
-      pRect(ctx, px + size * 0.2, py + size * 0.35, size * 0.25, 1, "#2e4a32");
-      pRect(ctx, px + size * 0.5, py + size * 0.65, size * 0.3, 1, "#2e4a32");
+    const mx = px + size * 0.5;
+    const my = py + size * 0.5;
+    if (variant === 0) {
+      // Gravel cluster: dark stone with sunlit top pixels
+      pRect(ctx, mx - size * 0.18, my - size * 0.05, 2, 2, "#0d180f");
+      pRect(ctx, mx - size * 0.18, my - size * 0.05 - 1, 2, 1, "#3b5c40");
+      pRect(ctx, mx + size * 0.14, my + size * 0.16, 2, 2, "#101f13");
+      pRect(ctx, mx + size * 0.14, my + size * 0.16 - 1, 1, 1, "#44654a");
+    } else if (variant === 1) {
+      // Dry grass tufts leaning away from NW light
+      pRect(ctx, mx - 3, my - 2, 1, 3, "#4d7853");
+      pRect(ctx, mx - 1, my - 1, 1, 3, "#3d6644");
+      pRect(ctx, mx + 2, my, 1, 2, "#578a5f");
     } else if (variant === 2) {
-      pRect(ctx, px + size * 0.3, py + size * 0.4, 2, 2, "#0d180f");
-      pRect(ctx, px + size * 0.7, py + size * 0.6, 2, 2, "#3b5c40");
-      pRect(ctx, px + size * 0.75, py + size * 0.65, 1, 1, "#4d7853");
+      // Cracked earth fissure with lit lower lip
+      pRect(ctx, mx - size * 0.2, my - 1, size * 0.42, 1, "#0c1710");
+      pRect(ctx, mx + size * 0.1, my, 1, size * 0.3, "#0c1710");
+      pRect(ctx, mx - size * 0.2, my, size * 0.42, 1, "#2c4731");
     } else if (variant === 3) {
-      pDither(ctx, px + size * 0.25, py + size * 0.2, size * 0.5, size * 0.5, groundBases[variant], "#253e2a");
+      // Worn dirt patch
+      pDither(ctx, px + size * 0.22, py + size * 0.24, size * 0.56, size * 0.52, "#20301c", "#2b4023");
+    } else if ((h & 7) === 0) {
+      // Rare battlefield debris: scorched tech plate with rivets
+      pRect(ctx, mx - 4, my - 3, 8, 6, "#232c33");
+      pRect(ctx, mx - 4, my - 3, 8, 1, "#39454f");
+      pRect(ctx, mx - 3, my - 2, 1, 1, "#0d1116");
+      pRect(ctx, mx + 2, my - 2, 1, 1, "#0d1116");
+      pRect(ctx, mx - 3, my + 1, 1, 1, "#0d1116");
+      pRect(ctx, mx + 2, my + 1, 1, 1, "#0d1116");
     }
+  }
+
+  // Contact shadow where rock meets soil — grounds formations visually.
+  if (size >= 6 && rock) {
+    const edge = Math.max(2, Math.round(size * 0.22));
+    ctx.fillStyle = "rgba(3, 7, 5, 0.4)";
+    if (rock.n) ctx.fillRect(Math.floor(px), Math.floor(py), Math.ceil(size), edge);
+    if (rock.w) ctx.fillRect(Math.floor(px), Math.floor(py), edge, Math.ceil(size));
+    if (rock.s) ctx.fillRect(Math.floor(px), Math.floor(py + size - edge), Math.ceil(size), edge);
+    if (rock.e) ctx.fillRect(Math.floor(px + size - edge), Math.floor(py), edge, Math.ceil(size));
   }
 }
 
@@ -142,35 +225,53 @@ export function drawImpassableTile(
   const h = tileHash(tx, ty);
 
   if (isExploredOnly) {
-    pRect(ctx, px, py, size, size, "#0f1318");
-    pStroke(ctx, px, py, size, size, "#080a0d");
+    pRect(ctx, px, py, size, size, "#0c1114");
+    // Faint plateau hint so remembered ridgelines stay readable.
+    pRect(ctx, px, py, size, Math.max(1, Math.floor(size * 0.18)), "#10161a");
+    pStroke(ctx, px, py, size, size, "#06090b");
     return;
   }
 
-  // 2.5D Basaltic rock formation
-  pRect(ctx, px, py, size, size, "#1c222b");
+  // 2.5D basalt formation: coherent macro tone + sedimentary strata bands.
+  const macro = vnoise(tx * 0.23 + 11, ty * 0.23 + 53);
+  pRect(ctx, px, py, size, size, mixColor("#1e2530", "#29323f", macro));
 
-  // Top & Left 2px bright highlight bevel (light from North-West)
-  pRect(ctx, px, py, size, 2, "#384556");
-  pRect(ctx, px, py, 2, size, "#384556");
-  pRect(ctx, px + 1, py + 1, size - 2, 1, "#4f5f75");
+  if (size >= 10) {
+    // Horizontal strata seams with per-band jitter
+    for (let i = 0; i < 3; i++) {
+      const by = py + size * (0.3 + i * 0.22) + ((h >> (i * 2)) & 1);
+      pRect(ctx, px, by, size, Math.max(1, Math.round(size * 0.07)), i % 2 === 0 ? "#161c25" : "#333d4c");
+    }
+  }
 
-  // Bottom & Right 2px deep shadow bevel
-  pRect(ctx, px, py + size - 2, size, 2, "#0b0e12");
-  pRect(ctx, px + size - 2, py, 2, size, "#0b0e12");
+  // Top & Left bright bevel — hard NW key light
+  pRect(ctx, px, py, size, 2, "#46536a");
+  pRect(ctx, px, py, 2, size, "#3a4759");
+  pRect(ctx, px + 1, py + 1, Math.max(1, size - 3), 1, "#5a6b85");
 
-  // Crag fissure crevasse
+  // Bottom & Right deep shadow bevel
+  pRect(ctx, px, py + size - 2, size, 2, "#090c10");
+  pRect(ctx, px + size - 2, py, 2, size, "#090c10");
+
+  // Lichen colonisation on some plateau tops (breaks up gray masses)
+  if (size >= 8 && (h & 7) < 2) {
+    pRect(ctx, px + size * 0.2, py + 2, Math.max(2, size * 0.16), 1, "#31502f");
+    pRect(ctx, px + size * 0.55, py + 3, Math.max(2, size * 0.12), 1, "#3c6339");
+  }
+
+  // Crag fissure crevasse with inner lit lip
   const fv = h % 3;
   if (size >= 10) {
     if (fv === 0) {
       pRect(ctx, px + size * 0.35, py + 3, 2, size * 0.45, "#0b0e12");
       pRect(ctx, px + size * 0.45, py + size * 0.45, size * 0.35, 2, "#0b0e12");
-      pRect(ctx, px + size * 0.35 - 1, py + 4, 1, size * 0.25, "#252d38");
+      pRect(ctx, px + size * 0.35 + 2, py + 4, 1, size * 0.25, "#2c3644");
     } else if (fv === 1) {
       pRect(ctx, px + 3, py + size * 0.4, size * 0.55, 2, "#0b0e12");
       pRect(ctx, px + size * 0.55, py + size * 0.4, 2, size * 0.4, "#0b0e12");
+      pRect(ctx, px + 3, py + size * 0.4 + 2, size * 0.4, 1, "#2c3644");
     } else {
-      pDither(ctx, px + 3, py + 3, size - 6, size - 6, "#252d38", "#1c222b");
+      pDither(ctx, px + 3, py + 3, size - 6, size - 6, "#2c3644", "#222a35");
     }
   }
 }
