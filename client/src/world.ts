@@ -154,6 +154,15 @@ export class World {
     }
   }
 
+  /** Clear interpolated render state (display positions, headings, motion).
+   *  Call when swapping to a different match or replay so stale positions
+   *  from a previous session can't leak into the new one. */
+  resetRenderState(): void {
+    this.display.clear();
+    this.headings.clear();
+    this.movingEntities.clear();
+  }
+
   /** Display (interpolated) position of an entity, falling back to its target. */
   pos(id: number): { x: number; y: number } {
     const e = this.entities.get(id);

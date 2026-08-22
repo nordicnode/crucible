@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { applyFrame, applyMeta, type ReplayFrame, type ReplayMeta } from "./snapshot";
 import { World } from "./world";
 
+function frameFixture(units: ReplayFrame["units"], buildings: ReplayFrame["buildings"] = []): ReplayFrame {
+  return { tick: 10, ore0: 0, ore1: 0, units, buildings, winner: null, win_reason: null };
+}
+
 function metaFixture(): ReplayMeta {
   const passable = new Array<boolean>(64 * 64).fill(true);
   const ore = new Array<number>(64 * 64).fill(0);
@@ -99,5 +103,49 @@ describe("movement interpolation", () => {
     w.applyDiff(11, 0, [], [], [], []);
     expect(w.entities.has(3)).toBe(false);
     expect(w.display.has(3)).toBe(false);
+  });
+
+  it("applyFrame carries display positions across frames and prunes deaths", () => {
+    const w = new World();
+    applyMeta(w, metaFixture());
+    const unit = (x: number, y: number) => [
+      { id: 3, kind: "Infantry", owner: 0, x, y, hp: 40, max_hp: 40 },
+    ];
+
+    // New entity snaps to its first reported position.
+    applyFrame(w, frameFixture(unit(10, 10)));
+    expect(w.pos(3)).toEqual({ x: 10, y: 10 });
+
+    // Next frame moves the target; display starts from the old position so
+    // playback can interpolate instead of teleporting.
+    applyFrame(w, frameFixture(unit(12, 12)));
+    expect(w.entities.get(3)?.x).toBe(12);
+    expect(w.pos(3).x).toBeLessThan(12);
+    w.advance(100);
+    expect(w.pos(3).x).toBeCloseTo(12, 5);
+
+    // A vanished entity leaves no display ghost behind.
+    applyFrame(w, frameFixture([]));
+    expect(w.entities.has(3)).toBe(false);
+    expect(w.display.has(3)).toBe(false);
+  });
+
+  it("applyMeta clears render state from a previously loaded session", () => {
+    const w = new World();
+    w.applyDiff(
+      5,
+      0,
+      [{ id: 9, kind: "Tank", owner: 0, x: 3, y: 3, hp: 120, maxHp: 120 }],
+      [],
+      [],
+      [],
+    );
+    expect(w.display.size).toBe(1);
+    expect(w.headings.size).toBe(1);
+
+    applyMeta(w, metaFixture());
+    expect(w.display.size).toBe(0);
+    expect(w.headings.size).toBe(0);
+    expect(w.result).toBeNull();
   });
 });

@@ -85,6 +85,7 @@ class Spectate {
     hide("museum");
     hide("sidebar");
     hide("log");
+    hide("topbar");
     hide("spectate-bar");
     show("overlay");
     show("spectate-list");
@@ -174,12 +175,17 @@ class Spectate {
     const dt = Math.min(0.25, (now - this.lastTime) / 1000);
     this.lastTime = now;
 
+    // Glide display positions toward the latest frame's authoritative ones so
+    // playback is smooth between the replay's 10 Hz frames (this also drives
+    // unit heading rotation and turret aiming, like a live match).
+    this.world.advance(dt * 1000);
+
     if (this.playing && this.replayJson != null) {
       this.tick += dt * TICKS_PER_SEC * SPEEDS[this.speedIndex];
       if (this.tick >= this.duration) {
         this.tick = this.duration;
         this.playing = false;
-        el("sp-play").textContent = "▶";
+        el("sp-play").textContent = "PLAY";
       }
       const t = Math.floor(this.tick);
       if (t !== this.renderedTick) {

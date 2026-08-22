@@ -407,22 +407,6 @@
       .log-msg-kill { color: #a7f3d0; }
       .log-msg-info { color: #94a3b8; }
 
-      /* --- Tooltip --- */
-      #tooltip {
-        position: absolute;
-        pointer-events: none;
-        z-index: 30;
-        background: #0f172a;
-        border: 1px solid var(--cyan);
-        border-radius: 2px;
-        padding: 4px 8px;
-        font-size: 11px;
-        color: #f8fafc;
-        display: none;
-        white-space: nowrap;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.8);
-      }
-
       /* --- Spectator Replay Bar --- */
       #spectate-bar {
         position: absolute;
@@ -664,12 +648,10 @@
       <div class="body" id="log-body"></div>
     </div>
 
-    <div id="tooltip"></div>
-
     <!-- Replay Spectator Bar (Zero Emojis) -->
     <div id="spectate-bar" class="steel hidden">
       <button class="btn" id="sp-play">PLAY</button>
-      <button class="btn" id="sp-speed">1X</button>
+      <button class="btn" id="sp-speed">1×</button>
       <input type="range" id="sp-scrub" min="0" max="1" value="0" />
       <span id="sp-clock">0:00</span>
       <span id="sp-score"></span>

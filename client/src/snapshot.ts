@@ -59,6 +59,9 @@ export function applyMeta(world: World, meta: ReplayMeta): void {
   world.visible = all;
   world.explored = new Set(all);
   world.entities = new Map();
+  // Drop display positions/headings from any previously loaded replay or
+  // match so entities can't ghost-render at stale coordinates.
+  world.resetRenderState();
   world.tick = 0;
   world.ore = 0;
   world.events = [];
@@ -67,11 +70,8 @@ export function applyMeta(world: World, meta: ReplayMeta): void {
 
 /** Replace the world's entities/score with one spectate frame. */
 export function applyFrame(world: World, frame: ReplayFrame): void {
-  world.tick = frame.tick;
-  world.ore = frame.ore0;
-  const entities = new Map<number, DiffEntity>();
-  for (const u of frame.units) {
-    entities.set(u.id, {
+  const entities: DiffEntity[] = [
+    ...frame.units.map((u) => ({
       id: u.id,
       kind: u.kind,
       owner: u.owner,
@@ -79,10 +79,8 @@ export function applyFrame(world: World, frame: ReplayFrame): void {
       y: u.y,
       hp: u.hp,
       maxHp: u.max_hp,
-    });
-  }
-  for (const b of frame.buildings) {
-    entities.set(b.id, {
+    })),
+    ...frame.buildings.map((b) => ({
       id: b.id,
       kind: b.kind,
       owner: b.owner,
@@ -90,9 +88,19 @@ export function applyFrame(world: World, frame: ReplayFrame): void {
       y: b.y,
       hp: b.hp,
       maxHp: b.max_hp,
-    });
-  }
-  world.entities = entities;
+    })),
+  ];
+  // Reuse the live-diff pipeline so spectate gets the same display-position
+  // carry-over, default headings, and stale-entity pruning as a live match.
+  // The map/visibility state set by applyMeta is passed through unchanged.
+  world.applyDiff(
+    frame.tick,
+    frame.ore0,
+    entities,
+    [...world.oreTiles.values()],
+    [...world.visible],
+    [],
+  );
   world.result =
     frame.winner == null
       ? null

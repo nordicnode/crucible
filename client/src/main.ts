@@ -4,6 +4,7 @@
 import { initDashboard } from "./dashboard";
 import { museum } from "./museum";
 import { fx } from "./fx";
+import { packGroupMessages } from "./groupCommands";
 import { IntelLogger } from "./intel";
 import { Net } from "./net";
 import { drawRadar, isBuildingPlacable, Renderer } from "./renderer";
@@ -160,13 +161,20 @@ function onServerMsg(msg: ServerMsg): void {
         }
       }
 
-      // Check for destroyed entities
+      // Check for destroyed entities. A vanished entity is only reported
+      // as destroyed when it was freshly observed — a stale fog ghost whose
+      // memory simply expired left vision long ago and must not produce a
+      // fake death explosion or kill report.
       for (const [id] of prevEntityHp) {
         if (!msg.entities.some((e) => e.id === id)) {
           const oldE = world.entities.get(id);
           if (oldE) {
-            fx.spawnDeath(oldE.x, oldE.y, world.heading(id), oldE.kind, oldE.owner);
-            intel.processEntityDestroyed(msg.tick, oldE);
+            const stale = oldE.stale ?? null;
+            const wasFresh = stale == null || world.tick - stale < 20;
+            if (wasFresh) {
+              fx.spawnDeath(oldE.x, oldE.y, world.heading(id), oldE.kind, oldE.owner);
+              intel.processEntityDestroyed(msg.tick, oldE);
+            }
           }
           prevEntityHp.delete(id);
         }
@@ -231,6 +239,26 @@ function onServerMsg(msg: ServerMsg): void {
   }
 }
 
+/**
+ * The server closes the socket right after MatchEnd (and after ServerBusy),
+ * so a bare "show lobby on close" would stomp the result screen and wipe the
+ * busy notice. Route every close through here instead.
+ */
+function onLinkClosed(): void {
+  // A finished match is showing its result panel — keep it up.
+  if (!el("result").classList.contains("hidden")) return;
+  // Already back at the briefing (e.g. serverBusy): keep its status message,
+  // or explain the drop when there is none.
+  if (!inGame && !el("lobby").classList.contains("hidden")) {
+    if (!el("lobby-status").textContent) {
+      el("lobby-status").textContent = "TACTICAL LINK LOST — SERVER UNREACHABLE.";
+    }
+    return;
+  }
+  showLobby();
+  el("lobby-status").textContent = "TACTICAL LINK LOST — SERVER UNREACHABLE.";
+}
+
 function startMatch(which: string, label?: string): void {
   inGame = false;
   opponentLabel = label ?? which;
@@ -241,7 +269,7 @@ function startMatch(which: string, label?: string): void {
   intel.clear();
   lastRenderedLogCount = -1;
   net.close();
-  net.connect(onServerMsg, showLobby);
+  net.connect(onServerMsg, onLinkClosed);
   net.send({ type: "joinMatch", opponent: which });
 }
 
@@ -264,6 +292,16 @@ function sendCommands(cmds: Command[]): void {
   if (cmds.length > 0) net.send({ type: "commands", cmds });
 }
 
+/** Unit-group commands must respect every server cap: ≤32 ids per command
+ *  AND ≤64 ids total per message (an oversized batch is dropped whole, with
+ *  no feedback). packGroupMessages splits accordingly; each returned group is
+ *  sent as its own message. */
+function sendGroupCommands(units: number[], make: (ids: number[]) => Command): void {
+  for (const cmds of packGroupMessages(units, make)) {
+    sendCommands(cmds);
+  }
+}
+
 function selectedUnits(): number[] {
   return [...selection].filter((id) => {
     const e = world.entities.get(id);
@@ -277,8 +315,7 @@ function selectedSingle(): number | null {
 
 function issueMove(tile: [number, number]): void {
   const units = selectedUnits();
-  if (units.length > 0) {
-    sendCommands([moveGroup(units, tile)]);
+  if (units.length > 0) {      sendGroupCommands(units, (ids) => moveGroup(ids, tile));
     for (const u of units) {
       unitWaypoints.set(u, tile);
     }
@@ -420,7 +457,7 @@ canvas.addEventListener("mousedown", (ev) => {
       return e && e.kind !== "Harvester";
     });
     if (target && units.length > 0) {
-      sendCommands([attack(units, target.id)]);
+      sendGroupCommands(units, (ids) => attack(ids, target.id));
     } else {
       issueMove([tx, ty]);
     }
@@ -462,7 +499,10 @@ canvas.addEventListener("mousemove", (ev) => {
   }
 });
 
-canvas.addEventListener("mouseup", (ev) => {
+// Mouseup lives on the window so a drag released outside the canvas (over
+// the sidebar or past the viewport edge) still finishes cleanly instead of
+// leaving drag/pan state stuck.
+window.addEventListener("mouseup", (ev) => {
   minimapDragging = false;
   if (ev.button === 1) {
     panning = false;
@@ -477,13 +517,15 @@ canvas.addEventListener("mouseup", (ev) => {
   if (Math.hypot(sx - start[0], sy - start[1]) < 4) {
     selectAt(sx, sy, ev.shiftKey);
   } else {
-    boxSelect(start, [sx, sy]);
+    boxSelect(start, [sx, sy], ev.shiftKey);
   }
 });
 
-function boxSelect(a: [number, number], b: [number, number]): void {
+function boxSelect(a: [number, number], b: [number, number], additive: boolean): void {
   const minX = Math.min(a[0], b[0]), maxX = Math.max(a[0], b[0]);
   const minY = Math.min(a[1], b[1]), maxY = Math.max(a[1], b[1]);
+  // A drag-box replaces the current selection; holding Shift adds to it.
+  if (!additive) selection = new Set();
   for (const e of world.ownUnits) {
     const sx = renderer.camera.screenX(e.x);
     const sy = renderer.camera.screenY(e.y);
@@ -555,10 +597,20 @@ window.addEventListener("keydown", (ev) => {
   if (groupIdx !== null) {
     if (ev.ctrlKey || ev.metaKey) {
       // Assign: save the current selection (units only; buildings stay put).
-      controlGroups.set(groupIdx, new Set(world.ownUnits.map((u) => u.id)));
+      controlGroups.set(groupIdx, new Set(selectedUnits()));
+      ev.preventDefault();
     } else if (controlGroups.has(groupIdx)) {
-      // Recall: select the group (Shift adds instead of replacing).
-      selection = new Set(controlGroups.get(groupIdx)!);
+      // Recall: select the group, dropping ids that no longer exist.
+      // Shift adds to the current selection instead of replacing it.
+      const alive = new Set(
+        [...controlGroups.get(groupIdx)!].filter((id) => world.entities.has(id)),
+      );
+      controlGroups.set(groupIdx, alive);
+      if (ev.shiftKey) {
+        for (const id of alive) selection.add(id);
+      } else {
+        selection = alive;
+      }
       lastPanelSig = "";
       renderCommandSidebar();
     }
@@ -574,6 +626,8 @@ window.addEventListener("keydown", (ev) => {
   };
   const tab = tabFor(ev.key);
   if (tab) {
+    // Keep F1..F4 from triggering browser help/find while commanding.
+    ev.preventDefault();
     activeTab = tab;
     lastPanelSig = "";
     renderCommandSidebar();
@@ -1225,12 +1279,6 @@ function frame(ts: number): void {
 
   if (spectate.active) {
     spectate.draw(ctx, canvas.width, canvas.height);
-    if (radarCtx && radarCanvas) {
-      drawRadar(radarCtx, spectate.world, new Set(), spectate.renderer.camera, radarCanvas.width, radarCanvas.height);
-    }
-    el("opponent").textContent = "SPECTATING REPLAY";
-    el("ore").textContent = `${spectate.score0} · ${spectate.score1}`;
-    el("clock").textContent = formatClock(spectate.currentTick);
     requestAnimationFrame(frame);
     return;
   }

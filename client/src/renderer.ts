@@ -553,7 +553,8 @@ export function drawRadar(
   // 3. Entities
   for (const e of world.entities.values()) {
     const p = world.pos(e.id);
-    const isSel = selection.has(e.id);      ctx.fillStyle = isSel ? COLORS.selected : e.owner === 0 ? COLORS.own : COLORS.enemy;
+    const isSel = selection.has(e.id);
+    ctx.fillStyle = isSel ? COLORS.selected : e.owner === 0 ? COLORS.own : COLORS.enemy;
     const dotSize = isUnit(e) ? Math.max(2, s) : Math.max(3, s * 1.5);
     ctx.fillRect(ox + p.x * s - dotSize / 2, oy + p.y * s - dotSize / 2, dotSize, dotSize);
   }
